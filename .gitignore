@@ -159,3 +159,7 @@ __pypackages__/
 
 .omx/
 docs/plans/
+.venv/
+logs/
+models/
+experiments/

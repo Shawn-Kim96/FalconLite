@@ -1,0 +1,85 @@
+project:
+  name: FalconLite
+  stage: 7
+
+physics:
+  dt: 0.02
+  gravity: 9.81
+  mass: 1.0
+  dry_mass: 0.7
+  inertia: 0.05
+  engine_lever_arm: 1.0
+  max_thrust: 20.0
+  max_gimbal_angle: 0.35
+  fuel_burn_rate: 0.02
+  world_x_limit: 100.0
+  world_y_limit: 150.0
+
+environment:
+  max_steps: 2000
+  max_speed: 50.0
+  max_angular_speed: 20.0
+  max_angle: 3.141592653589793
+  initial_state:
+    x: 0.0
+    y: 100.0
+    vx: 0.0
+    vy: 0.0
+    theta: 0.0
+    omega: 0.0
+    fuel: 1.0
+
+render:
+  width: 900
+  height: 700
+  margin: 60
+  fps: 50
+  rocket_width_px: 18
+  rocket_height_px: 58
+  pad_width_m: 20.0
+  velocity_scale: 2.0
+
+reward:
+  pad_x: 0.0
+  landing_tolerance: 5.0
+  max_touchdown_vx: 2.0
+  max_touchdown_vy: 3.0
+  max_touchdown_angle: 0.2
+  max_touchdown_omega: 1.0
+  target_descent_rate_gain: 0.08
+  min_target_descent_rate: 1.0
+  max_target_descent_rate: 8.0
+  x_weight: 2.0
+  vx_weight: 0.5
+  vy_weight: 1.0
+  theta_weight: 0.75
+  omega_weight: 0.25
+  fuel_weight: 0.02
+  time_penalty: 0.01
+  success_bonus: 100.0
+  crash_penalty: -100.0
+  out_of_bounds_penalty: -100.0
+  max_steps_penalty: -20.0
+
+pid:
+  max_target_angle: 0.35
+  x:
+    kp: 0.02
+    ki: 0.0
+    kd: 0.01
+  theta:
+    kp: 2.0
+    ki: 0.0
+    kd: 0.5
+  descent:
+    kp: 0.05
+    ki: 0.0
+    kd: 0.02
+
+evaluation:
+  episodes: 10
+  seed: 0
+
+logging:
+  directory: logs
+  episode_id: 1
