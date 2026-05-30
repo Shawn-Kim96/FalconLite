@@ -3,28 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Any
 
+from falconlite.env.geometry import RocketGeometry
 from falconlite.env.state import RocketAction, RocketState
 
 
 @dataclass(frozen=True)
 class PhysicsConfig:
-    """Physical parameters for the 2D rocket model."""
+    """Physical parameters for the 2D rocket model.
+
+    Defaults model a returning Falcon 9 booster on its landing burn:
+    dry mass ~25.6 t, landing-reserve propellant ~10 t, single Merlin
+    throttled between ~40% and 100% of ~845 kN.
+    """
 
     dt: float = 0.02
     gravity: float = 9.81
-    mass: float = 1.0
-    dry_mass: float = 0.7
-    inertia: float = 0.05
-    engine_lever_arm: float = 1.0
-    max_thrust: float = 20.0
-    max_gimbal_angle: float = 0.35
-    fuel_burn_rate: float = 0.02
-    world_x_limit: float = 100.0
-    world_y_limit: float = 150.0
+    mass: float = 35_600.0
+    dry_mass: float = 25_600.0
+    inertia: float = 3_600_000.0
+    max_thrust: float = 845_000.0
+    max_gimbal_angle: float = 0.087
+    fuel_burn_rate: float = 280.0
+    world_x_limit: float = 1_000.0
+    world_y_limit: float = 2_500.0
+    geometry: RocketGeometry = field(default_factory=RocketGeometry)
 
     def __post_init__(self) -> None:
         if self.dt <= 0:
@@ -44,12 +50,17 @@ class PhysicsConfig:
         if self.world_x_limit <= 0 or self.world_y_limit <= 0:
             raise ValueError("world limits must be positive.")
 
+    @property
+    def engine_offset_m(self) -> float:
+        return self.geometry.engine_offset_m
+
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "PhysicsConfig":
         """Build a config from a YAML-loaded mapping."""
 
-        allowed_keys = cls.__dataclass_fields__.keys()
-        filtered = {key: values[key] for key in allowed_keys if key in values}
+        scalar_keys = {key for key in cls.__dataclass_fields__ if key != "geometry"}
+        filtered: dict[str, Any] = {key: values[key] for key in scalar_keys if key in values}
+        filtered["geometry"] = RocketGeometry.from_mapping(values.get("geometry"))
         return cls(**filtered)
 
 
@@ -177,7 +188,7 @@ class PhysicsEngine:
         return thrust_x / mass, thrust_y / mass - self.config.gravity
 
     def _angular_acceleration(self, action: RocketAction) -> float:
-        torque = self.config.engine_lever_arm * action.thrust * math.sin(action.gimbal_angle)
+        torque = self.config.engine_offset_m * action.thrust * math.sin(action.gimbal_angle)
         return torque / self.config.inertia
 
     def _wrap_angle(self, angle: float) -> float:

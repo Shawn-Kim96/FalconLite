@@ -1,5 +1,6 @@
 """Simulation environment components."""
 
+from falconlite.env.geometry import RocketGeometry
 from falconlite.env.physics import PhysicsConfig, PhysicsEngine
 from falconlite.env.renderer import Renderer, RendererConfig
 from falconlite.env.rocket_env import EnvironmentConfig, RewardConfig, RocketLandingEnv
@@ -12,6 +13,7 @@ __all__ = [
     "Renderer",
     "RendererConfig",
     "RewardConfig",
+    "RocketGeometry",
     "RocketLandingEnv",
     "RocketAction",
     "RocketState",

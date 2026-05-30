@@ -5,26 +5,37 @@ project:
 physics:
   dt: 0.02
   gravity: 9.81
-  mass: 1.0
-  dry_mass: 0.7
-  inertia: 0.05
-  engine_lever_arm: 1.0
-  max_thrust: 20.0
-  max_gimbal_angle: 0.35
-  fuel_burn_rate: 0.02
-  world_x_limit: 100.0
-  world_y_limit: 150.0
+  mass: 35600.0
+  dry_mass: 25600.0
+  inertia: 3600000.0
+  max_thrust: 845000.0
+  max_gimbal_angle: 0.087
+  fuel_burn_rate: 280.0
+  world_x_limit: 1000.0
+  world_y_limit: 2500.0
+  geometry:
+    height_m: 41.0
+    width_m: 3.7
+    engine_offset_m: 18.0
+    nozzle_radius_m: 0.9
+    leg_length_m: 9.0
+    leg_span_m: 12.0
+    leg_stow_angle_rad: 0.0
+    leg_deploy_angle_rad: 0.6108
+    grid_fin_offset_m: 18.0
+    grid_fin_chord_m: 1.5
+    grid_fin_span_m: 1.5
 
 environment:
-  max_steps: 2000
-  max_speed: 50.0
-  max_angular_speed: 20.0
+  max_steps: 4000
+  max_speed: 300.0
+  max_angular_speed: 1.0
   max_angle: 3.141592653589793
   initial_state:
     x: 0.0
-    y: 100.0
+    y: 2000.0
     vx: 0.0
-    vy: 0.0
+    vy: -100.0
     theta: 0.0
     omega: 0.0
     fuel: 1.0
@@ -34,21 +45,19 @@ render:
   height: 700
   margin: 60
   fps: 50
-  rocket_width_px: 18
-  rocket_height_px: 58
-  pad_width_m: 20.0
-  velocity_scale: 2.0
+  pad_width_m: 60.0
+  velocity_scale: 0.5
 
 reward:
   pad_x: 0.0
-  landing_tolerance: 5.0
+  landing_tolerance: 30.0
   max_touchdown_vx: 2.0
-  max_touchdown_vy: 3.0
-  max_touchdown_angle: 0.2
-  max_touchdown_omega: 1.0
-  target_descent_rate_gain: 0.08
-  min_target_descent_rate: 1.0
-  max_target_descent_rate: 8.0
+  max_touchdown_vy: 6.0
+  max_touchdown_angle: 0.1
+  max_touchdown_omega: 0.1
+  target_descent_rate_gain: 0.05
+  min_target_descent_rate: 2.0
+  max_target_descent_rate: 80.0
   x_weight: 2.0
   vx_weight: 0.5
   vy_weight: 1.0
