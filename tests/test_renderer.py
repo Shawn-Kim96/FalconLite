@@ -21,12 +21,15 @@ def make_renderer() -> Renderer:
     return Renderer(physics_config, render_config)
 
 
-def test_world_origin_maps_to_ground_center(monkeypatch) -> None:
+def test_world_origin_maps_to_screen_center_when_camera_at_origin(monkeypatch) -> None:
+    """With the camera-following renderer, before any render() call the camera
+    is at the world origin, so (0, 0) maps to the screen center."""
+
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     renderer = make_renderer()
 
     try:
-        assert renderer.world_to_screen(0, 0) == (250, 350)
+        assert renderer.world_to_screen(0, 0) == (250, 200)
     finally:
         renderer.close()
 

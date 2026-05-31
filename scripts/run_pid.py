@@ -19,66 +19,95 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _run_episode(
+    *,
+    env: RocketLandingEnv,
+    controller: PIDController,
+    args: argparse.Namespace,
+    logger: TelemetryLogger | None,
+) -> tuple[int, float, dict]:
+    reset_options = {"scenario": args.scenario} if args.scenario is not None else None
+    _, last_info = env.reset(options=reset_options)
+    controller.reset()
+    if env.renderer is not None:
+        env.renderer.reset_episode()
+
+    executed_steps = 0
+    total_reward = 0.0
+    for step in range(args.steps):
+        action = controller.select_action(last_info["state"], last_info)
+        _, reward, terminated, truncated, last_info = env.step(action)
+        total_reward += reward
+        executed_steps = step + 1
+        if logger is not None:
+            logger.log_step(
+                state=last_info["state"],
+                action=last_info["actual_action"],
+                reward=reward,
+                info=last_info,
+            )
+        if args.render:
+            env.render()
+            if env.renderer is not None and env.renderer.closed:
+                break
+        if terminated or truncated:
+            break
+
+    return executed_steps, total_reward, last_info
+
+
 def main() -> None:
     args = parse_args()
     config = load_config()
     controller = PIDController(config)
     env = RocketLandingEnv(config=config, render_mode="human" if args.render else None)
-    reset_options = {"scenario": args.scenario} if args.scenario is not None else None
-    _, last_info = env.reset(options=reset_options)
-    controller.reset()
     log_config = config.get("logging", {})
-    logger = (
-        TelemetryLogger(
-            log_dir=args.log_dir or log_config.get("directory", "logs"),
-            episode_id=args.episode_id,
-        )
-        if args.log
-        else None
-    )
+    log_dir = args.log_dir or log_config.get("directory", "logs")
 
-    executed_steps = 0
-    total_reward = 0.0
+    episode_index = args.episode_id
     try:
-        for step in range(args.steps):
-            action = controller.select_action(last_info["state"], last_info)
-            _, reward, terminated, truncated, last_info = env.step(action)
-            total_reward += reward
-            executed_steps = step + 1
-            if logger is not None:
-                logger.log_step(
-                    state=last_info["state"],
-                    action=last_info["actual_action"],
-                    reward=reward,
-                    info=last_info,
+        while True:
+            logger = (
+                TelemetryLogger(log_dir=log_dir, episode_id=episode_index)
+                if args.log
+                else None
+            )
+            try:
+                executed_steps, total_reward, last_info = _run_episode(
+                    env=env,
+                    controller=controller,
+                    args=args,
+                    logger=logger,
                 )
-            if args.render:
-                env.render()
-                if env.renderer is not None and env.renderer.closed:
-                    break
-            if terminated or truncated:
-                break
-    finally:
-        if logger is not None:
-            logger.close()
-        env.close()
+            finally:
+                if logger is not None:
+                    logger.close()
 
-    state = last_info["state"]
-    print("FalconLite Stage 6 PID rollout")
-    print(f"project: {config['project']['name']}")
-    print(f"scenario: {args.scenario or 'default'}")
-    print(f"steps: {executed_steps}")
-    print(f"done_reason: {last_info['done_reason']}")
-    print(f"is_success: {last_info['is_success']}")
-    print(f"total_reward: {total_reward:.3f}")
-    print(
-        "final_state: "
-        f"x={state.x:.3f}, y={state.y:.3f}, vx={state.vx:.3f}, vy={state.vy:.3f}, "
-        f"theta={state.theta:.3f}, omega={state.omega:.3f}, fuel={state.fuel:.3f}, "
-        f"legs_deployed={state.legs_deployed}, stable_time={state.stable_time:.3f}"
-    )
-    if logger is not None:
-        print(f"telemetry: {logger.path}")
+            state = last_info["state"]
+            print("FalconLite PID rollout")
+            print(f"project: {config['project']['name']}")
+            print(f"scenario: {args.scenario or 'default'}")
+            print(f"steps: {executed_steps}")
+            print(f"done_reason: {last_info['done_reason']}")
+            print(f"is_success: {last_info['is_success']}")
+            print(f"total_reward: {total_reward:.3f}")
+            print(
+                "final_state: "
+                f"x={state.x:.3f}, y={state.y:.3f}, vx={state.vx:.3f}, vy={state.vy:.3f}, "
+                f"theta={state.theta:.3f}, omega={state.omega:.3f}, fuel={state.fuel:.3f}, "
+                f"legs_deployed={state.legs_deployed}, stable_time={state.stable_time:.3f}"
+            )
+            if logger is not None:
+                print(f"telemetry: {logger.path}")
+
+            if not args.render or env.renderer is None or env.renderer.closed:
+                break
+            if not env.renderer.wait_for_rerun_or_close():
+                break
+            episode_index += 1
+            print("--- rerunning ---")
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
