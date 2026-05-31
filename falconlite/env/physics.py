@@ -26,8 +26,10 @@ class PhysicsConfig:
     dry_mass: float = 25_600.0
     inertia: float = 3_600_000.0
     max_thrust: float = 845_000.0
+    min_throttle: float = 0.40
+    engine_off_threshold: float = 0.05
     max_gimbal_angle: float = 0.087
-    fuel_burn_rate: float = 280.0
+    fuel_burn_rate: float = 308.0
     ground_contact_tolerance_m: float = 0.25
     air_density_kg_m3: float = 1.225
     drag_cd_axial: float = 0.65
@@ -49,6 +51,10 @@ class PhysicsConfig:
             raise ValueError("inertia must be positive.")
         if self.max_thrust <= 0:
             raise ValueError("max_thrust must be positive.")
+        if not 0.0 <= self.min_throttle < 1.0:
+            raise ValueError("min_throttle must be in [0, 1).")
+        if not 0.0 <= self.engine_off_threshold <= 1.0:
+            raise ValueError("engine_off_threshold must be in [0, 1].")
         if self.max_gimbal_angle < 0:
             raise ValueError("max_gimbal_angle must be non-negative.")
         if self.fuel_burn_rate < 0:
@@ -104,10 +110,28 @@ class PhysicsEngine:
         gimbal_command = min(max(float(command[1]), -1.0), 1.0)
         leg_deploy = bool(float(command[2]) >= 0.5) if len(command) == 3 else False
         return RocketAction(
-            thrust=thrust_command * self.config.max_thrust,
+            thrust=self._normalized_thrust_to_force(thrust_command),
             gimbal_angle=gimbal_command * self.config.max_gimbal_angle,
             leg_deploy=leg_deploy,
         )
+
+    def _normalized_thrust_to_force(self, command: float) -> float:
+        """Map a [0, 1] command to physical thrust honoring min_throttle.
+
+        Below ``engine_off_threshold`` the engine is off (thrust = 0). Above it,
+        the command is scaled into ``[min_throttle, 1.0]`` of ``max_thrust``,
+        modeling Merlin-class lower throttle limits.
+        """
+
+        if command < self.config.engine_off_threshold:
+            return 0.0
+        span = 1.0 - self.config.engine_off_threshold
+        if span <= 0.0:
+            scaled = 1.0
+        else:
+            scaled = (command - self.config.engine_off_threshold) / span
+        throttle = self.config.min_throttle + (1.0 - self.config.min_throttle) * scaled
+        return throttle * self.config.max_thrust
 
     def step(self, state: RocketState, action: RocketAction | Sequence[float] | Mapping[str, Any]) -> tuple[RocketState, dict]:
         """Advance the rocket state by one fixed timestep."""
@@ -123,12 +147,15 @@ class PhysicsEngine:
 
         mass = self._current_mass(state)
         base_acceleration_x, base_acceleration_y = self._linear_acceleration(state, actual_action, mass)
-        drag_force_x, drag_force_y, drag = self._drag_force(state)
+        drag_force_x, drag_force_y, drag_torque, drag = self._drag_force(state)
         drag_acceleration_x = drag_force_x / mass
         drag_acceleration_y = drag_force_y / mass
         acceleration_x = base_acceleration_x + drag_acceleration_x
         acceleration_y = base_acceleration_y + drag_acceleration_y
-        angular_acceleration = self._angular_acceleration(actual_action)
+        angular_acceleration = (
+            self._angular_acceleration(state, actual_action)
+            + drag_torque / self.config.inertia
+        )
 
         dt = self.config.dt
         vx = state.vx + acceleration_x * dt
@@ -161,6 +188,7 @@ class PhysicsEngine:
             "base_acceleration": (base_acceleration_x, base_acceleration_y),
             "drag_acceleration": (drag_acceleration_x, drag_acceleration_y),
             "drag": drag,
+            "drag_torque": drag_torque,
             "angular_acceleration": angular_acceleration,
             "fuel_used": fuel_used,
             "mass": mass,
@@ -189,13 +217,29 @@ class PhysicsEngine:
 
     def _clamp_action(self, action: RocketAction) -> RocketAction:
         return RocketAction(
-            thrust=min(max(action.thrust, 0.0), self.config.max_thrust),
+            thrust=self._clamp_thrust(action.thrust),
             gimbal_angle=min(
                 max(action.gimbal_angle, -self.config.max_gimbal_angle),
                 self.config.max_gimbal_angle,
             ),
             leg_deploy=action.leg_deploy,
         )
+
+    def _clamp_thrust(self, thrust: float) -> float:
+        """Clamp a physical thrust value to {0} ∪ [min_throttle·F_max, F_max].
+
+        Mirrors the engine off-or-throttled-up envelope so direct
+        ``RocketAction`` construction (e.g. dict actions in tests) cannot
+        bypass the ``min_throttle`` constraint.
+        """
+
+        thrust = min(max(float(thrust), 0.0), self.config.max_thrust)
+        min_thrust = self.config.min_throttle * self.config.max_thrust
+        if thrust <= 0.0:
+            return 0.0
+        if thrust < min_thrust:
+            return 0.0
+        return thrust
 
     def _consume_fuel(self, state: RocketState, requested_thrust: float) -> tuple[float, float]:
         if state.fuel <= 0.0 or requested_thrust <= 0.0:
@@ -219,59 +263,110 @@ class PhysicsEngine:
         thrust_y = action.thrust * math.cos(thrust_angle)
         return thrust_x / mass, thrust_y / mass - self.config.gravity
 
-    def _drag_force(self, state: RocketState) -> tuple[float, float, dict[str, float]]:
-        relative_vx = state.vx - self.config.wind_x_mps
-        relative_vy = state.vy - self.config.wind_y_mps
-        speed = math.hypot(relative_vx, relative_vy)
+    def _drag_force(
+        self, state: RocketState
+    ) -> tuple[float, float, float, dict[str, float]]:
+        """Distributed aerodynamic drag.
+
+        Sums drag at each body-axis node. Each node has its own velocity
+        (``v_cm + omega x r``) and its own slice of the booster's projected
+        area. Output is (Fx, Fy, torque, debug_info). The torque comes from
+        the cross product r x F summed over nodes — this is what produces
+        passive aerodynamic stabilization when the booster is misaligned with
+        its velocity vector.
+        """
+
+        if self.config.air_density_kg_m3 <= 0.0:
+            return 0.0, 0.0, 0.0, self._empty_drag_info()
+
         geometry = self.config.geometry
-        axial_area = math.pi * (geometry.width_m / 2) ** 2
-        side_area = geometry.width_m * geometry.height_m
+        nodes = geometry.aero_nodes_body()
+        cos_theta = math.cos(state.theta)
+        sin_theta = math.sin(state.theta)
+        body_axis_x = sin_theta
+        body_axis_y = cos_theta
+        wind_x = self.config.wind_x_mps
+        wind_y = self.config.wind_y_mps
 
-        if self.config.air_density_kg_m3 <= 0.0 or speed <= 1e-9:
-            return (
-                0.0,
-                0.0,
-                {
-                    "force_x": 0.0,
-                    "force_y": 0.0,
-                    "speed_mps": speed,
-                    "projected_area_m2": axial_area,
-                    "cda_m2": 0.0,
-                    "axial_alignment": 1.0,
-                    "side_alignment": 0.0,
-                },
+        total_fx = 0.0
+        total_fy = 0.0
+        total_torque = 0.0
+        cm_speed = math.hypot(state.vx - wind_x, state.vy - wind_y)
+        for node_x_body, node_y_body, side_area, axial_area in nodes:
+            # Body-frame point to world relative offset (rotation only).
+            r_x = node_x_body * cos_theta + node_y_body * sin_theta
+            r_y = -node_x_body * sin_theta + node_y_body * cos_theta
+
+            # Node velocity = v_cm + omega x r (2D cross: omega x r = (-omega*r_y, omega*r_x)).
+            node_vx = state.vx - state.omega * r_y
+            node_vy = state.vy + state.omega * r_x
+
+            rel_vx = node_vx - wind_x
+            rel_vy = node_vy - wind_y
+            speed = math.hypot(rel_vx, rel_vy)
+            if speed <= 1e-9:
+                continue
+
+            dir_x = rel_vx / speed
+            dir_y = rel_vy / speed
+            axial_alignment = abs(body_axis_x * dir_x + body_axis_y * dir_y)
+            side_alignment = abs(body_axis_x * dir_y - body_axis_y * dir_x)
+
+            cda = (
+                self.config.drag_cd_axial * axial_area * axial_alignment
+                + self.config.drag_cd_side * side_area * side_alignment
             )
+            drag_mag = 0.5 * self.config.air_density_kg_m3 * speed * speed * cda
+            fx = -drag_mag * dir_x
+            fy = -drag_mag * dir_y
+            total_fx += fx
+            total_fy += fy
+            # Torque about CM: r x F (2D scalar = r_x * F_y - r_y * F_x).
+            total_torque += r_x * fy - r_y * fx
 
-        velocity_dir_x = relative_vx / speed
-        velocity_dir_y = relative_vy / speed
-        body_axis_x = math.sin(state.theta)
-        body_axis_y = math.cos(state.theta)
-        axial_alignment = abs(body_axis_x * velocity_dir_x + body_axis_y * velocity_dir_y)
-        side_alignment = abs(body_axis_x * velocity_dir_y - body_axis_y * velocity_dir_x)
-        projected_area = axial_area * axial_alignment + side_area * side_alignment
-        cda = (
-            self.config.drag_cd_axial * axial_area * axial_alignment
-            + self.config.drag_cd_side * side_area * side_alignment
-        )
-        drag_magnitude = 0.5 * self.config.air_density_kg_m3 * speed * speed * cda
-        force_x = -drag_magnitude * velocity_dir_x
-        force_y = -drag_magnitude * velocity_dir_y
-        return (
-            force_x,
-            force_y,
-            {
-                "force_x": force_x,
-                "force_y": force_y,
-                "speed_mps": speed,
-                "projected_area_m2": projected_area,
-                "cda_m2": cda,
-                "axial_alignment": axial_alignment,
-                "side_alignment": side_alignment,
-            },
-        )
+        info = {
+            "force_x": total_fx,
+            "force_y": total_fy,
+            "torque": total_torque,
+            "speed_mps": cm_speed,
+            "projected_area_m2": sum(n[2] for n in nodes),
+            "cda_m2": 0.0,
+            "axial_alignment": 0.0,
+            "side_alignment": 0.0,
+        }
+        return total_fx, total_fy, total_torque, info
 
-    def _angular_acceleration(self, action: RocketAction) -> float:
-        torque = self.config.engine_offset_m * action.thrust * math.sin(action.gimbal_angle)
+    def _empty_drag_info(self) -> dict[str, float]:
+        return {
+            "force_x": 0.0,
+            "force_y": 0.0,
+            "torque": 0.0,
+            "speed_mps": 0.0,
+            "projected_area_m2": 0.0,
+            "cda_m2": 0.0,
+            "axial_alignment": 1.0,
+            "side_alignment": 0.0,
+        }
+
+    def _angular_acceleration(self, state: RocketState, action: RocketAction) -> float:
+        """Torque from the engine thrust about the booster's center of mass.
+
+        Thrust is applied at the engine node (body coords (0, -engine_offset)),
+        directed by ``theta + gimbal_angle`` in world coords. The torque is the
+        2D cross product r x F, where r is the engine node position relative
+        to the CM in world coords.
+        """
+
+        cos_theta = math.cos(state.theta)
+        sin_theta = math.sin(state.theta)
+        # Engine node body-frame position rotated to world-relative.
+        node_y_body = -self.config.engine_offset_m
+        r_x = node_y_body * sin_theta
+        r_y = node_y_body * cos_theta
+        thrust_angle = state.theta + action.gimbal_angle
+        f_x = action.thrust * math.sin(thrust_angle)
+        f_y = action.thrust * math.cos(thrust_angle)
+        torque = r_x * f_y - r_y * f_x
         return torque / self.config.inertia
 
     def _wrap_angle(self, angle: float) -> float:
@@ -354,7 +449,6 @@ class PhysicsEngine:
         )
         body_names = (
             "nose",
-            "nozzle",
             "left_body_bottom",
             "right_body_bottom",
             "left_body_top",

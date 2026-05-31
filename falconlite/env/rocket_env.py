@@ -47,12 +47,18 @@ class RewardConfig:
     """Reward shaping and landing classification settings."""
 
     pad_x: float = 0.0
-    landing_tolerance: float = 5.0
-    max_touchdown_vx: float = 2.0
-    max_touchdown_vy: float = 3.0
-    max_touchdown_angle: float = 0.2
-    max_touchdown_omega: float = 1.0
+    precision_tolerance: float = 2.0
+    precision_max_vx: float = 0.5
+    precision_max_vy: float = 2.0
+    precision_max_angle: float = 0.035
+    precision_max_omega: float = 0.03
+    rough_tolerance: float = 8.0
+    rough_max_vx: float = 2.0
+    rough_max_vy: float = 4.0
+    rough_max_angle: float = 0.087
+    rough_max_omega: float = 0.1
     required_stable_time: float = 3.0
+    rough_landing_reward: float = 0.0
     target_descent_rate_gain: float = 0.08
     min_target_descent_rate: float = 1.0
     max_target_descent_rate: float = 8.0
@@ -75,16 +81,30 @@ class RewardConfig:
         return cls(**filtered)
 
     def __post_init__(self) -> None:
-        if self.landing_tolerance <= 0:
-            raise ValueError("landing_tolerance must be positive.")
-        if self.max_touchdown_vx <= 0:
-            raise ValueError("max_touchdown_vx must be positive.")
-        if self.max_touchdown_vy <= 0:
-            raise ValueError("max_touchdown_vy must be positive.")
-        if self.max_touchdown_angle <= 0:
-            raise ValueError("max_touchdown_angle must be positive.")
-        if self.max_touchdown_omega <= 0:
-            raise ValueError("max_touchdown_omega must be positive.")
+        for name in (
+            "precision_tolerance",
+            "precision_max_vx",
+            "precision_max_vy",
+            "precision_max_angle",
+            "precision_max_omega",
+            "rough_tolerance",
+            "rough_max_vx",
+            "rough_max_vy",
+            "rough_max_angle",
+            "rough_max_omega",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive.")
+        if self.rough_tolerance < self.precision_tolerance:
+            raise ValueError("rough_tolerance must be >= precision_tolerance.")
+        if self.rough_max_vx < self.precision_max_vx:
+            raise ValueError("rough_max_vx must be >= precision_max_vx.")
+        if self.rough_max_vy < self.precision_max_vy:
+            raise ValueError("rough_max_vy must be >= precision_max_vy.")
+        if self.rough_max_angle < self.precision_max_angle:
+            raise ValueError("rough_max_angle must be >= precision_max_angle.")
+        if self.rough_max_omega < self.precision_max_omega:
+            raise ValueError("rough_max_omega must be >= precision_max_omega.")
         if self.required_stable_time <= 0:
             raise ValueError("required_stable_time must be positive.")
         if self.min_target_descent_rate <= 0 or self.max_target_descent_rate < self.min_target_descent_rate:
@@ -135,10 +155,12 @@ class RocketLandingEnv(gym.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         initial_state_values = dict(self.initial_state_config)
+        scenario_name: str | None = None
         if options is not None:
-            scenario_name = options.get("scenario")
-            if scenario_name is not None:
-                initial_state_values.update(self._scenario_initial_state(str(scenario_name)))
+            scenario_value = options.get("scenario")
+            if scenario_value is not None:
+                scenario_name = str(scenario_value)
+                initial_state_values.update(self._scenario_initial_state(scenario_name))
             if "initial_state" in options:
                 initial_state_values.update(options["initial_state"])
 
@@ -151,6 +173,9 @@ class RocketLandingEnv(gym.Env):
             "is_success": False,
             "failure_flags": self._empty_failure_flags(),
             "reward_terms": self._empty_reward_terms(),
+            "scenario": scenario_name,
+            "initial_state": dict(initial_state_values),
+            "seed": seed,
         }
         self.step_count = 0
         return self._get_obs(), self._get_info()
@@ -160,7 +185,28 @@ class RocketLandingEnv(gym.Env):
         if scenario_name not in scenarios:
             available = ", ".join(sorted(scenarios)) or "none"
             raise ValueError(f"Unknown scenario '{scenario_name}'. Available scenarios: {available}.")
-        return dict(scenarios[scenario_name])
+        return {key: self._resolve_scenario_value(key, value) for key, value in scenarios[scenario_name].items()}
+
+    def _resolve_scenario_value(self, key: str, value: Any) -> Any:
+        """Resolve a scenario field to a concrete value.
+
+        A two-element ``[min, max]`` list/tuple of numerics is treated as a
+        uniform-sample range using the env's gymnasium RNG; anything else
+        passes through unchanged.
+        """
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            low, high = value
+            both_numeric = (
+                isinstance(low, (int, float))
+                and isinstance(high, (int, float))
+                and not isinstance(low, bool)
+                and not isinstance(high, bool)
+            )
+            if both_numeric:
+                if high < low:
+                    raise ValueError(f"Scenario range for '{key}' must satisfy min <= max, got [{low}, {high}].")
+                return float(self.np_random.uniform(float(low), float(high)))
+        return value
 
     def step(self, action: object) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         action_array = np.asarray(action, dtype=np.float32)
@@ -303,6 +349,8 @@ class RocketLandingEnv(gym.Env):
     def _terminal_reward(self, done_reason: str) -> float:
         if done_reason == "success":
             return self.reward_config.success_bonus
+        if done_reason == "rough_landing":
+            return self.reward_config.rough_landing_reward
         if done_reason == "out_of_bounds":
             return self.reward_config.out_of_bounds_penalty
         if done_reason == "max_steps":
@@ -329,8 +377,8 @@ class RocketLandingEnv(gym.Env):
 
         contact = physics_info.get("contact", {})
         if physics_done_reason == "leg_contact":
-            failure_flags = self._ground_contact_failure_flags(contact)
-            if any(failure_flags.values()):
+            failure_flags, tier = self._ground_contact_classification(contact)
+            if tier == "crash":
                 return {
                     "done_reason": self._primary_failure_reason(failure_flags),
                     "is_success": False,
@@ -339,9 +387,10 @@ class RocketLandingEnv(gym.Env):
                     "truncated": False,
                 }
             if self.state.stable_time >= self.reward_config.required_stable_time:
+                done_reason = "success" if tier == "precision" else "rough_landing"
                 return {
-                    "done_reason": "success",
-                    "is_success": True,
+                    "done_reason": done_reason,
+                    "is_success": tier == "precision",
                     "failure_flags": failure_flags,
                     "terminated": True,
                     "truncated": False,
@@ -384,12 +433,19 @@ class RocketLandingEnv(gym.Env):
                 "truncated": False,
             }
 
-        failure_flags = self._ground_contact_failure_flags(contact)
-        is_success = not any(failure_flags.values())
-        if is_success:
+        failure_flags, tier = self._ground_contact_classification(contact)
+        if tier == "precision":
             return {
                 "done_reason": "success",
                 "is_success": True,
+                "failure_flags": failure_flags,
+                "terminated": True,
+                "truncated": False,
+            }
+        if tier == "rough":
+            return {
+                "done_reason": "rough_landing",
+                "is_success": False,
                 "failure_flags": failure_flags,
                 "terminated": True,
                 "truncated": False,
@@ -403,21 +459,40 @@ class RocketLandingEnv(gym.Env):
             "truncated": False,
         }
 
-    def _ground_contact_failure_flags(self, contact: Mapping[str, Any]) -> dict[str, bool]:
-        return {
-            "missed_pad": abs(self.state.x - self.reward_config.pad_x) > self.reward_config.landing_tolerance,
-            "hard_landing": (
-                abs(contact.get("contact_vx", self.state.vx)) > self.reward_config.max_touchdown_vx
-                or abs(contact.get("contact_vy", self.state.vy)) > self.reward_config.max_touchdown_vy
-            ),
-            "tip_over": (
-                abs(contact.get("contact_theta", self.state.theta)) > self.reward_config.max_touchdown_angle
-                or abs(contact.get("contact_omega", self.state.omega)) > self.reward_config.max_touchdown_omega
-            ),
-            "body_contact": bool(contact.get("body_contact", False)),
-            "one_foot_contact": self._one_foot_contact(contact),
+    def _ground_contact_classification(
+        self, contact: Mapping[str, Any]
+    ) -> tuple[dict[str, bool], str]:
+        """Return failure flags plus a tier in {"precision", "rough", "crash"}."""
+
+        rc = self.reward_config
+        x_err = abs(self.state.x - rc.pad_x)
+        vx = abs(contact.get("contact_vx", self.state.vx))
+        vy = abs(contact.get("contact_vy", self.state.vy))
+        theta = abs(contact.get("contact_theta", self.state.theta))
+        omega = abs(contact.get("contact_omega", self.state.omega))
+        body_contact = bool(contact.get("body_contact", False))
+        one_foot = self._one_foot_contact(contact)
+
+        crash_flags = {
+            "missed_pad": x_err > rc.rough_tolerance,
+            "hard_landing": vx > rc.rough_max_vx or vy > rc.rough_max_vy,
+            "tip_over": theta > rc.rough_max_angle or omega > rc.rough_max_omega,
+            "body_contact": body_contact,
+            "one_foot_contact": one_foot,
             "out_of_bounds": False,
         }
+        if any(crash_flags.values()):
+            return crash_flags, "crash"
+
+        # Survived the rough envelope; check precision.
+        within_precision = (
+            x_err <= rc.precision_tolerance
+            and vx <= rc.precision_max_vx
+            and vy <= rc.precision_max_vy
+            and theta <= rc.precision_max_angle
+            and omega <= rc.precision_max_omega
+        )
+        return crash_flags, "precision" if within_precision else "rough"
 
     def _primary_failure_reason(self, failure_flags: Mapping[str, bool]) -> str:
         for reason in ("out_of_bounds", "body_contact", "missed_pad", "hard_landing", "tip_over", "one_foot_contact"):

@@ -67,13 +67,16 @@ def test_pid_falling_too_fast_increases_thrust() -> None:
     assert fast_action[0] > slow_action[0]
 
 
-def test_pid_deploys_legs_below_configured_altitude() -> None:
+def test_pid_deploys_legs_only_in_final_approach() -> None:
     controller = make_controller()
-    high_state = RocketState(x=0, y=150, vx=0, vy=-5, theta=0, omega=0, fuel=10_000)
+    high_state = RocketState(x=0, y=200, vx=0, vy=-5, theta=0, omega=0, fuel=10_000)
+    fast_state = RocketState(x=0, y=80, vx=0, vy=-60, theta=0, omega=0, fuel=10_000)
     low_state = RocketState(x=0, y=80, vx=0, vy=-5, theta=0, omega=0, fuel=10_000)
 
     high_action = controller.select_action(high_state)
+    fast_action = controller.select_action(fast_state)
     low_action = controller.select_action(low_state)
 
-    assert high_action[2] == 0.0
-    assert low_action[2] == 1.0
+    assert high_action[2] == 0.0  # too high
+    assert fast_action[2] == 0.0  # low but still descending fast
+    assert low_action[2] == 1.0  # low and slow → deploy

@@ -136,7 +136,23 @@ def test_drag_opposes_downward_velocity() -> None:
     assert vacuum_info["drag"]["force_y"] == 0
 
 
-def test_sideways_body_has_more_drag_area_than_upright_body() -> None:
+def test_distributed_drag_damps_angular_rate() -> None:
+    """A spinning, falling booster should pick up a drag torque opposing the
+    spin (per-node velocity = v_cm + omega x r differs along the body, so the
+    summed r x F is non-zero and points against omega)."""
+
+    engine = make_engine(air_density_kg_m3=1.225)
+    state = RocketState(x=0, y=2000, vx=0, vy=-100, theta=0, omega=0.5, fuel=10_000)
+
+    _, info = engine.step(state, RocketAction(thrust=0, gimbal_angle=0))
+
+    assert info["drag_torque"] < 0  # opposes positive spin
+
+
+def test_sideways_body_has_more_drag_force_than_upright_body() -> None:
+    """With distributed per-node drag, the side-on attitude exposes much more
+    side area to the airstream and produces a much larger upward drag force."""
+
     engine = make_engine(air_density_kg_m3=1.225)
     upright = RocketState(x=0, y=2000, vx=0, vy=-100, theta=0, omega=0, fuel=10_000)
     sideways = RocketState(x=0, y=2000, vx=0, vy=-100, theta=1.5707963267948966, omega=0, fuel=10_000)
@@ -144,5 +160,4 @@ def test_sideways_body_has_more_drag_area_than_upright_body() -> None:
     _, upright_info = engine.step(upright, RocketAction(thrust=0, gimbal_angle=0))
     _, sideways_info = engine.step(sideways, RocketAction(thrust=0, gimbal_angle=0))
 
-    assert sideways_info["drag"]["projected_area_m2"] > upright_info["drag"]["projected_area_m2"]
     assert sideways_info["drag"]["force_y"] > upright_info["drag"]["force_y"]

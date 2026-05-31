@@ -36,7 +36,11 @@ def test_run_episode_returns_result_for_random_controller() -> None:
     }
 
 
-def test_run_episode_pid_can_succeed() -> None:
+def test_run_episode_pid_terminates_with_known_outcome() -> None:
+    """PID is no longer a hover-converging success baseline once Merlin-class
+    min_throttle is enforced. We only assert that an episode terminates with a
+    valid done_reason; success is no longer guaranteed for the simple PID."""
+
     config = load_config()
     env = RocketLandingEnv(config=config)
 
@@ -51,8 +55,61 @@ def test_run_episode_pid_can_succeed() -> None:
     finally:
         env.close()
 
-    assert result.is_success
-    assert result.done_reason == "success"
+    assert result.steps > 0
+    assert result.done_reason in {
+        "success",
+        "rough_landing",
+        "missed_pad",
+        "hard_landing",
+        "tip_over",
+        "body_contact",
+        "one_foot_contact",
+        "out_of_bounds",
+        "max_steps",
+    }
+
+
+def test_randomized_landing_burn_samples_within_configured_ranges() -> None:
+    config = load_config()
+    ranges = config["scenarios"]["randomized_landing_burn"]
+    env = RocketLandingEnv(config=config)
+
+    try:
+        for seed in range(5):
+            _, info = env.reset(seed=seed, options={"scenario": "randomized_landing_burn"})
+            state = info["state"]
+            for field, attr in (
+                ("x", "x"),
+                ("y", "y"),
+                ("vx", "vx"),
+                ("vy", "vy"),
+                ("theta", "theta"),
+                ("omega", "omega"),
+                ("fuel", "fuel"),
+            ):
+                low, high = ranges[field]
+                value = getattr(state, attr)
+                assert low <= value <= high, f"seed={seed} {field}={value} outside [{low}, {high}]"
+            assert state.legs_deployed is False
+            assert state.stable_time == 0.0
+            assert info["scenario"] == "randomized_landing_burn"
+            assert info["seed"] == seed
+    finally:
+        env.close()
+
+
+def test_randomized_landing_burn_is_seed_reproducible() -> None:
+    config = load_config()
+    env_a = RocketLandingEnv(config=config)
+    env_b = RocketLandingEnv(config=config)
+
+    try:
+        _, info_a = env_a.reset(seed=42, options={"scenario": "randomized_landing_burn"})
+        _, info_b = env_b.reset(seed=42, options={"scenario": "randomized_landing_burn"})
+        assert info_a["state"] == info_b["state"]
+    finally:
+        env_a.close()
+        env_b.close()
 
 
 def test_run_episode_accepts_diagonal_scenario() -> None:
@@ -66,13 +123,14 @@ def test_run_episode_accepts_diagonal_scenario() -> None:
             controller_name="pid",
             episode_id=1,
             seed=0,
-            scenario="terminal_diagonal",
+            scenario="landing_burn_diagonal",
         )
     finally:
         env.close()
 
-    assert result.is_success
-    assert result.done_reason == "success"
+    assert result.scenario == "landing_burn_diagonal"
+    assert result.steps > 0
+    assert result.initial_x == -250.0
 
 
 def test_summarize_episode_results() -> None:

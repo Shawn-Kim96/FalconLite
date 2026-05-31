@@ -19,7 +19,7 @@ def test_reset_returns_observation_and_info() -> None:
         assert obs.shape == env.observation_space.shape
         assert env.observation_space.contains(obs)
         assert info["done_reason"] == "reset"
-        assert info["state"].y == 250.0
+        assert info["state"].y == 4600.0
     finally:
         env.close()
 
@@ -28,12 +28,12 @@ def test_reset_accepts_named_initial_state_scenario() -> None:
     env = RocketLandingEnv()
 
     try:
-        obs, info = env.reset(options={"scenario": "terminal_diagonal"})
+        obs, info = env.reset(options={"scenario": "landing_burn_diagonal"})
 
         assert env.observation_space.contains(obs)
-        assert info["state"].x == -100.0
-        assert info["state"].vx == 12.0
-        assert info["state"].vy == -30.0
+        assert info["state"].x == -250.0
+        assert info["state"].vx == -40.0
+        assert info["state"].vy == -300.0
     finally:
         env.close()
 
@@ -262,7 +262,7 @@ def test_out_of_bounds_has_terminal_penalty() -> None:
         env.reset(
             options={
                 "initial_state": {
-                    "x": 251.0,
+                    "x": 1501.0,
                     "y": 100.0,
                     "vx": 0.0,
                     "vy": 0.0,

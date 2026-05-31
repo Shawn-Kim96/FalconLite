@@ -48,6 +48,15 @@ class EpisodeResult:
     body_contact: bool = False
     one_foot_contact: bool = False
     log_path: str | None = None
+    scenario: str | None = None
+    seed: int | None = None
+    initial_x: float | None = None
+    initial_y: float | None = None
+    initial_vx: float | None = None
+    initial_vy: float | None = None
+    initial_theta: float | None = None
+    initial_omega: float | None = None
+    initial_fuel: float | None = None
 
 
 def run_episode(
@@ -67,8 +76,9 @@ def run_episode(
 
     reset_options = {"scenario": scenario} if scenario is not None else None
     _, info = env.reset(seed=seed, options=reset_options)
-    initial_fuel = info["state"].fuel
-    max_tilt = abs(info["state"].theta)
+    initial_state = info["state"]
+    initial_fuel_value = initial_state.fuel
+    max_tilt = abs(initial_state.theta)
     total_reward = 0.0
     steps = 0
     logger = TelemetryLogger(log_dir=log_dir, episode_id=episode_id) if log_dir is not None else None
@@ -113,7 +123,7 @@ def run_episode(
         final_theta=state.theta,
         final_omega=state.omega,
         final_fuel=state.fuel,
-        fuel_used=max(0.0, initial_fuel - state.fuel),
+        fuel_used=max(0.0, initial_fuel_value - state.fuel),
         touchdown_speed=touchdown_speed,
         max_tilt=max_tilt,
         missed_pad=bool(failure_flags.get("missed_pad", False)),
@@ -123,4 +133,13 @@ def run_episode(
         body_contact=bool(failure_flags.get("body_contact", False)),
         one_foot_contact=bool(failure_flags.get("one_foot_contact", False)),
         log_path=str(logger.path) if logger is not None else None,
+        scenario=scenario,
+        seed=seed,
+        initial_x=initial_state.x,
+        initial_y=initial_state.y,
+        initial_vx=initial_state.vx,
+        initial_vy=initial_state.vy,
+        initial_theta=initial_state.theta,
+        initial_omega=initial_state.omega,
+        initial_fuel=initial_fuel_value,
     )

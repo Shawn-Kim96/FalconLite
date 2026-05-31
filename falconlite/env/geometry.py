@@ -17,16 +17,26 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RocketGeometry:
-    """Meter-scale dimensions for a Falcon-9-style booster in side view."""
+    """Meter-scale dimensions for a Falcon-9-style booster in side view.
+
+    Coordinate convention (body frame):
+    - Origin (0, 0) is the geometric center of the booster.
+    - +y points toward the nose, -y toward the engine.
+    - Body bottom (engine base) is at y = -height_m / 2.
+    - Body top (nose) is at y = +height_m / 2.
+    - The engine nozzle sits ``engine_offset_m`` below the origin; for a
+      Falcon-9-style booster this equals height_m / 2.
+    """
 
     height_m: float = 41.0
     width_m: float = 3.7
-    engine_offset_m: float = 18.0
+    engine_offset_m: float = 20.5
     nozzle_radius_m: float = 0.9
     leg_length_m: float = 9.0
     leg_span_m: float = 12.0
     leg_stow_angle_rad: float = 0.0
     leg_deploy_angle_rad: float = math.radians(35.0)
+    # Grid fin offset is now measured upward from origin (body center).
     grid_fin_offset_m: float = 18.0
     grid_fin_chord_m: float = 1.5
     grid_fin_span_m: float = 1.5
@@ -52,8 +62,8 @@ class RocketGeometry:
             raise ValueError("deploy angle must be >= stow angle.")
         if self.grid_fin_offset_m <= 0:
             raise ValueError("grid_fin_offset_m must be positive.")
-        if self.grid_fin_offset_m > self.height_m:
-            raise ValueError("grid_fin_offset_m must not exceed height_m.")
+        if self.grid_fin_offset_m > self.height_m / 2:
+            raise ValueError("grid_fin_offset_m must not exceed height_m / 2.")
         if self.grid_fin_chord_m <= 0 or self.grid_fin_span_m <= 0:
             raise ValueError("grid fin dimensions must be positive.")
 
@@ -71,17 +81,22 @@ class RocketGeometry:
 
     def nose_position_body(self) -> tuple[float, float]:
         """Nose tip in the body frame."""
-        return (0.0, self.height_m - self.engine_offset_m)
+        return (0.0, self.height_m / 2)
 
     def body_bottom_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        """Left and right body bottom corners in the body frame."""
+        """Left and right body bottom corners in the body frame.
+
+        These are the structural base of the booster (engine deck), at
+        y = -height_m / 2.
+        """
         radius = self.width_m / 2
-        return ((-radius, -self.engine_offset_m), (radius, -self.engine_offset_m))
+        bottom_y = -self.height_m / 2
+        return ((-radius, bottom_y), (radius, bottom_y))
 
     def body_top_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Left and right body shoulder corners below the nose."""
         radius = self.width_m / 2
-        nose_y = self.height_m - self.engine_offset_m
+        nose_y = self.height_m / 2
         shoulder_y = nose_y - min(3.0, self.height_m * 0.08)
         return ((-radius, shoulder_y), (radius, shoulder_y))
 
@@ -92,9 +107,15 @@ class RocketGeometry:
         return (left_bottom, right_bottom, right_top, self.nose_position_body(), left_top)
 
     def leg_hinge_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        """Hinge points of the two side-view landing legs in the body frame."""
+        """Hinge points of the two side-view landing legs in the body frame.
+
+        Hinges sit on the body wall a short distance above the engine base.
+        With the body center at origin, base = -height/2, so the hinge sits
+        slightly higher than that.
+        """
         body_radius = self.width_m / 2
-        hinge_y = -self.engine_offset_m + 0.5 * self.leg_length_m
+        bottom_y = -self.height_m / 2
+        hinge_y = bottom_y + 0.5 * self.leg_length_m
         return ((-body_radius, hinge_y), (body_radius, hinge_y))
 
     def grid_fin_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -105,20 +126,22 @@ class RocketGeometry:
     def foot_positions_body(self, deployed: bool) -> tuple[tuple[float, float], tuple[float, float]]:
         """Tips of the two landing legs (left, right) in the body frame.
 
-        When stowed, feet sit flush against the body just above the engine.
-        When deployed, feet swing out to ``leg_span_m`` total footprint width
-        and reach slightly below the engine bell.
+        When stowed, feet tuck flat against the booster wall and never reach
+        below the engine base. When deployed, feet swing out to ``leg_span_m``
+        total footprint width and extend slightly below the engine bell.
         """
-        angle = self.leg_deploy_angle_rad if deployed else self.leg_stow_angle_rad
         body_radius = self.width_m / 2
-        hinge_y = -self.engine_offset_m + 0.5 * self.leg_length_m
+        bottom_y = -self.height_m / 2
+        hinge_y = bottom_y + 0.5 * self.leg_length_m
         if deployed:
+            angle = self.leg_deploy_angle_rad
             half_span = self.leg_span_m / 2
             foot_y = hinge_y - self.leg_length_m * math.cos(angle)
             return ((-half_span, foot_y), (half_span, foot_y))
 
+        # Stowed: foot tucks flush with the body wall just above the base.
         foot_x = body_radius
-        foot_y = hinge_y - self.leg_length_m
+        foot_y = max(bottom_y + 0.5, hinge_y - self.leg_length_m * math.cos(self.leg_stow_angle_rad))
         return ((-foot_x, foot_y), (foot_x, foot_y))
 
     def body_to_world(
@@ -137,6 +160,48 @@ class RocketGeometry:
             x + point_x * cos_theta + point_y * sin_theta,
             y - point_x * sin_theta + point_y * cos_theta,
         )
+
+    def aero_nodes_body(self) -> tuple[tuple[float, float, float, float], ...]:
+        """Distributed aerodynamic sample points along the booster body axis.
+
+        Returns a tuple of (x_body, y_body, side_area, axial_area) for 5 nodes
+        evenly spaced from engine base (-height/2) to nose (+height/2). The
+        sums of side_area and axial_area equal the full-body projected areas
+        used by the legacy single-point drag model, so total drag is conserved
+        when the booster is straight-line aligned. Off-axis motion produces
+        non-trivial torques because each node's velocity differs by ``omega x r``.
+        """
+
+        node_count = 5
+        bottom_y = -self.height_m / 2
+        top_y = self.height_m / 2
+        # Each interior node owns a vertical strip of length (height / (n - 1)).
+        # End nodes own half-strips so the totals match a fully integrated area.
+        strip = self.height_m / (node_count - 1)
+        side_area_total = self.width_m * self.height_m
+        axial_area_total = math.pi * (self.width_m / 2) ** 2
+
+        nodes = []
+        for index in range(node_count):
+            y = bottom_y + index * strip
+            # Endpoints: half-strip; middle nodes: full strip.
+            strip_fraction = 0.5 if index in (0, node_count - 1) else 1.0
+            side_area = self.width_m * strip * strip_fraction
+            # Axial drag dominated by the booster end caps; concentrate on
+            # engine deck (index 0) and nose (last index).
+            if index == 0:
+                axial_area = axial_area_total * 0.6
+            elif index == node_count - 1:
+                axial_area = axial_area_total * 0.4
+            else:
+                axial_area = 0.0
+            nodes.append((0.0, y, side_area, axial_area))
+
+        # Normalize side areas to match the closed-form total exactly so the
+        # split version reproduces single-point drag in the linear regime.
+        side_sum = sum(n[2] for n in nodes)
+        side_scale = side_area_total / side_sum if side_sum > 0 else 1.0
+        return tuple((x, y, sa * side_scale, ax) for (x, y, sa, ax) in nodes)
 
     def points_world(
         self,

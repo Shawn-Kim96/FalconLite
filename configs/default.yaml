@@ -5,24 +5,26 @@ project:
 physics:
   dt: 0.02
   gravity: 9.81
-  mass: 35600.0
+  mass: 30000.0
   dry_mass: 25600.0
   inertia: 3600000.0
   max_thrust: 845000.0
-  max_gimbal_angle: 0.087
-  fuel_burn_rate: 280.0
+  min_throttle: 0.40
+  engine_off_threshold: 0.05
+  max_gimbal_angle: 0.105
+  fuel_burn_rate: 304.0
   ground_contact_tolerance_m: 0.25
   air_density_kg_m3: 1.225
   drag_cd_axial: 0.65
   drag_cd_side: 1.05
   wind_x_mps: 0.0
   wind_y_mps: 0.0
-  world_x_limit: 250.0
-  world_y_limit: 350.0
+  world_x_limit: 1500.0
+  world_y_limit: 6000.0
   geometry:
     height_m: 41.0
     width_m: 3.7
-    engine_offset_m: 18.0
+    engine_offset_m: 20.5
     nozzle_radius_m: 0.9
     leg_length_m: 9.0
     leg_span_m: 18.3
@@ -33,40 +35,54 @@ physics:
     grid_fin_span_m: 1.5
 
 environment:
-  max_steps: 3000
-  max_speed: 120.0
+  # 32s budget at dt=0.02 → 1600 steps. Add ~25% headroom for slow/oscillating controllers.
+  max_steps: 2000
+  max_speed: 500.0
   max_angular_speed: 1.0
   max_angle: 3.141592653589793
   initial_state:
     x: 0.0
-    y: 250.0
+    y: 4600.0
     vx: 0.0
-    vy: -30.0
+    vy: -300.0
     theta: 0.0
     omega: 0.0
-    fuel: 10000.0
+    fuel: 4400.0
     legs_deployed: false
     stable_time: 0.0
 
 scenarios:
-  terminal_vertical:
+  # Falcon 9 landing burn — full burn from main engine ignition (~4.6 km, ~306 m/s)
+  # down to touchdown. Grid fins are NOT modeled; we assume they have already
+  # aligned the booster over the pad before burn ignition.
+  landing_burn_vertical:
     x: 0.0
-    y: 250.0
+    y: 4600.0
     vx: 0.0
-    vy: -30.0
+    vy: -300.0
     theta: 0.0
     omega: 0.0
-    fuel: 10000.0
+    fuel: 4400.0
     legs_deployed: false
     stable_time: 0.0
-  terminal_diagonal:
-    x: -100.0
-    y: 250.0
-    vx: 12.0
-    vy: -30.0
-    theta: 0.0
+  landing_burn_diagonal:
+    x: -250.0
+    y: 4600.0
+    vx: -40.0
+    vy: -300.0
+    theta: 0.14
     omega: 0.0
-    fuel: 10000.0
+    fuel: 4400.0
+    legs_deployed: false
+    stable_time: 0.0
+  randomized_landing_burn:
+    x: [-300.0, 300.0]
+    y: [4000.0, 5000.0]
+    vx: [-60.0, 60.0]
+    vy: [-350.0, -250.0]
+    theta: [-0.175, 0.175]
+    omega: [-0.05, 0.05]
+    fuel: [3500.0, 4500.0]
     legs_deployed: false
     stable_time: 0.0
 
@@ -80,15 +96,23 @@ render:
 
 reward:
   pad_x: 0.0
-  landing_tolerance: 30.0
-  max_touchdown_vx: 2.0
-  max_touchdown_vy: 6.0
-  max_touchdown_angle: 0.1
-  max_touchdown_omega: 0.1
+  # Precision tier — counts as success (Mechazilla-class catch / chopstick precision)
+  precision_tolerance: 1.0
+  precision_max_vx: 0.3
+  precision_max_vy: 1.5
+  precision_max_angle: 0.017
+  precision_max_omega: 0.02
+  # Rough tier — survived but damaged (legs bent, not reusable)
+  rough_tolerance: 8.0
+  rough_max_vx: 2.0
+  rough_max_vy: 4.0
+  rough_max_angle: 0.087
+  rough_max_omega: 0.1
   required_stable_time: 3.0
-  target_descent_rate_gain: 0.05
+  rough_landing_reward: 0.0
+  target_descent_rate_gain: 0.08
   min_target_descent_rate: 2.0
-  max_target_descent_rate: 80.0
+  max_target_descent_rate: 320.0
   x_weight: 2.0
   vx_weight: 0.5
   vy_weight: 1.0
@@ -103,7 +127,7 @@ reward:
 
 pid:
   max_target_angle: 0.18
-  leg_deploy_altitude_m: 120.0
+  leg_deploy_altitude_m: 100.0
   x:
     kp: 0.02
     ki: 0.0

@@ -113,7 +113,17 @@ class PIDController:
             + self.pid_config.descent.kp * descent_error
             + self.pid_config.descent.ki * self.descent_integral
         )
-        leg_deploy_command = 1.0 if state.legs_deployed or state.y <= self.pid_config.leg_deploy_altitude_m else 0.0
+        # Deploy legs only in the final approach: low altitude AND already
+        # decelerated to landing-burn-end velocity. Mirrors the real Falcon 9
+        # deploy ~a few seconds before touchdown.
+        leg_deploy_command = (
+            1.0
+            if (
+                state.legs_deployed
+                or (state.y <= self.pid_config.leg_deploy_altitude_m and abs(state.vy) <= 30.0)
+            )
+            else 0.0
+        )
 
         self.last_debug = {
             "pad_error": pad_error,

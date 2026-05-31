@@ -28,6 +28,7 @@ def summarize_episode_results(results: list[EpisodeResult]) -> dict[str, float]:
     return {
         "episodes": float(count),
         "success_rate": success_count / count,
+        "rough_landing_rate": done_counts["rough_landing"] / count,
         "crash_rate": crash_count / count,
         "hard_landing_rate": done_counts["hard_landing"] / count,
         "missed_pad_rate": done_counts["missed_pad"] / count,
