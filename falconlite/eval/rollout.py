@@ -45,6 +45,8 @@ class EpisodeResult:
     hard_landing: bool
     tip_over: bool
     out_of_bounds: bool
+    body_contact: bool = False
+    one_foot_contact: bool = False
     log_path: str | None = None
 
 
@@ -55,6 +57,7 @@ def run_episode(
     controller_name: str,
     episode_id: int,
     seed: int | None = None,
+    scenario: str | None = None,
     log_dir: str | Path | None = None,
 ) -> EpisodeResult:
     """Run one episode and return aggregate episode data."""
@@ -62,7 +65,8 @@ def run_episode(
     if hasattr(controller, "reset"):
         controller.reset()
 
-    _, info = env.reset(seed=seed)
+    reset_options = {"scenario": scenario} if scenario is not None else None
+    _, info = env.reset(seed=seed, options=reset_options)
     initial_fuel = info["state"].fuel
     max_tilt = abs(info["state"].theta)
     total_reward = 0.0
@@ -116,5 +120,7 @@ def run_episode(
         hard_landing=bool(failure_flags.get("hard_landing", False)),
         tip_over=bool(failure_flags.get("tip_over", False)),
         out_of_bounds=bool(failure_flags.get("out_of_bounds", False)),
+        body_contact=bool(failure_flags.get("body_contact", False)),
+        one_foot_contact=bool(failure_flags.get("one_foot_contact", False)),
         log_path=str(logger.path) if logger is not None else None,
     )

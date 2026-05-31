@@ -13,4 +13,5 @@ def test_freefall_script_runs() -> None:
     )
 
     assert "FalconLite no-thrust free-fall rollout" in result.stdout
-    assert "analytic_freefall" in result.stdout
+    assert "vacuum_reference" in result.stdout
+    assert "drag_last" in result.stdout

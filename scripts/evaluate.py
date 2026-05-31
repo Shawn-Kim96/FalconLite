@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controller", default="random", choices=["random", "pid"])
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--scenario", default=None, help="Initial-state scenario from configs/default.yaml.")
     parser.add_argument("--log", action="store_true", help="Write telemetry CSV for each episode.")
     parser.add_argument("--log-dir", default=None, help="Telemetry output directory.")
     parser.add_argument("--summary-csv", default=None, help="Optional aggregate metrics CSV path.")
@@ -50,6 +51,7 @@ def main() -> None:
                 controller_name=args.controller,
                 episode_id=episode_index + 1,
                 seed=seed + episode_index,
+                scenario=args.scenario,
                 log_dir=log_dir if args.log else None,
             )
             results.append(result)
@@ -60,6 +62,7 @@ def main() -> None:
 
     print("FalconLite Stage 7 evaluation")
     print(f"controller: {args.controller}")
+    print(f"scenario: {args.scenario or 'default'}")
     print(f"episodes: {episodes}")
     print(f"seed: {seed}")
     for name, value in metrics.items():
@@ -70,7 +73,10 @@ def main() -> None:
     if args.summary_csv is not None:
         output_path = Path(args.summary_csv)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        metrics_to_frame(metrics, metadata={"controller": args.controller, "seed": seed}).to_csv(output_path, index=False)
+        metrics_to_frame(metrics, metadata={"controller": args.controller, "seed": seed, "scenario": args.scenario}).to_csv(
+            output_path,
+            index=False,
+        )
         print(f"summary_csv: {output_path}")
 
     if args.episodes_csv is not None:

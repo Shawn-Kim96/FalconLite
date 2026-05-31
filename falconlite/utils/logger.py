@@ -20,10 +20,14 @@ TELEMETRY_COLUMNS = [
     "theta",
     "omega",
     "fuel",
+    "legs_deployed",
+    "stable_time",
     "thrust",
     "gimbal_angle",
+    "leg_deploy",
     "normalized_thrust",
     "normalized_gimbal",
+    "normalized_leg_deploy",
     "reward",
     "done_reason",
     "is_success",
@@ -32,7 +36,18 @@ TELEMETRY_COLUMNS = [
     "missed_pad",
     "hard_landing",
     "tip_over",
+    "body_contact",
+    "one_foot_contact",
     "out_of_bounds",
+    "left_foot_contact",
+    "right_foot_contact",
+    "foot_supported",
+    "drag_force_x",
+    "drag_force_y",
+    "drag_acceleration_x",
+    "drag_acceleration_y",
+    "drag_area_m2",
+    "air_relative_speed",
 ]
 
 
@@ -69,6 +84,9 @@ class TelemetryLogger:
 
         normalized_action = info.get("normalized_action")
         failure_flags = info.get("failure_flags", {})
+        contact = info.get("contact", {})
+        drag = info.get("drag", {})
+        drag_acceleration = info.get("drag_acceleration", (0.0, 0.0))
         row = {
             "episode_id": self.episode_id,
             "step": info.get("step", 0),
@@ -80,10 +98,14 @@ class TelemetryLogger:
             "theta": state.theta,
             "omega": state.omega,
             "fuel": state.fuel,
+            "legs_deployed": bool(state.legs_deployed),
+            "stable_time": state.stable_time,
             "thrust": action.thrust if action is not None else 0.0,
             "gimbal_angle": action.gimbal_angle if action is not None else 0.0,
+            "leg_deploy": bool(action.leg_deploy) if action is not None else False,
             "normalized_thrust": float(normalized_action[0]) if normalized_action is not None else 0.0,
             "normalized_gimbal": float(normalized_action[1]) if normalized_action is not None else 0.0,
+            "normalized_leg_deploy": float(normalized_action[2]) if normalized_action is not None else 0.0,
             "reward": reward,
             "done_reason": info.get("done_reason", "unknown"),
             "is_success": bool(info.get("is_success", False)),
@@ -92,7 +114,18 @@ class TelemetryLogger:
             "missed_pad": bool(failure_flags.get("missed_pad", False)),
             "hard_landing": bool(failure_flags.get("hard_landing", False)),
             "tip_over": bool(failure_flags.get("tip_over", False)),
+            "body_contact": bool(failure_flags.get("body_contact", False)),
+            "one_foot_contact": bool(failure_flags.get("one_foot_contact", False)),
             "out_of_bounds": bool(failure_flags.get("out_of_bounds", False)),
+            "left_foot_contact": bool(contact.get("left_foot_contact", False)),
+            "right_foot_contact": bool(contact.get("right_foot_contact", False)),
+            "foot_supported": bool(contact.get("foot_supported", False)),
+            "drag_force_x": float(drag.get("force_x", 0.0)),
+            "drag_force_y": float(drag.get("force_y", 0.0)),
+            "drag_acceleration_x": float(drag_acceleration[0]),
+            "drag_acceleration_y": float(drag_acceleration[1]),
+            "drag_area_m2": float(drag.get("projected_area_m2", 0.0)),
+            "air_relative_speed": float(drag.get("speed_mps", 0.0)),
         }
         self._writer.writerow(row)
 

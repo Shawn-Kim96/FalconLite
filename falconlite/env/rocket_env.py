@@ -52,6 +52,7 @@ class RewardConfig:
     max_touchdown_vy: float = 3.0
     max_touchdown_angle: float = 0.2
     max_touchdown_omega: float = 1.0
+    required_stable_time: float = 3.0
     target_descent_rate_gain: float = 0.08
     min_target_descent_rate: float = 1.0
     max_target_descent_rate: float = 8.0
@@ -84,6 +85,8 @@ class RewardConfig:
             raise ValueError("max_touchdown_angle must be positive.")
         if self.max_touchdown_omega <= 0:
             raise ValueError("max_touchdown_omega must be positive.")
+        if self.required_stable_time <= 0:
+            raise ValueError("required_stable_time must be positive.")
         if self.min_target_descent_rate <= 0 or self.max_target_descent_rate < self.min_target_descent_rate:
             raise ValueError("target descent rates must satisfy 0 < min <= max.")
 
@@ -114,13 +117,13 @@ class RocketLandingEnv(gym.Env):
         self.step_count = 0
 
         self.action_space = spaces.Box(
-            low=np.array([0.0, -1.0], dtype=np.float32),
-            high=np.array([1.0, 1.0], dtype=np.float32),
+            low=np.array([0.0, -1.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
         self.observation_space = spaces.Box(
-            low=np.array([-1.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+            low=np.array([-1.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
 
@@ -132,8 +135,12 @@ class RocketLandingEnv(gym.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         initial_state_values = dict(self.initial_state_config)
-        if options is not None and "initial_state" in options:
-            initial_state_values.update(options["initial_state"])
+        if options is not None:
+            scenario_name = options.get("scenario")
+            if scenario_name is not None:
+                initial_state_values.update(self._scenario_initial_state(str(scenario_name)))
+            if "initial_state" in options:
+                initial_state_values.update(options["initial_state"])
 
         self.state = RocketState(**initial_state_values)
         self.last_action = None
@@ -148,6 +155,13 @@ class RocketLandingEnv(gym.Env):
         self.step_count = 0
         return self._get_obs(), self._get_info()
 
+    def _scenario_initial_state(self, scenario_name: str) -> dict[str, Any]:
+        scenarios = self.config.get("scenarios", {})
+        if scenario_name not in scenarios:
+            available = ", ".join(sorted(scenarios)) or "none"
+            raise ValueError(f"Unknown scenario '{scenario_name}'. Available scenarios: {available}.")
+        return dict(scenarios[scenario_name])
+
     def step(self, action: object) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         action_array = np.asarray(action, dtype=np.float32)
         if action_array.shape != self.action_space.shape:
@@ -159,9 +173,16 @@ class RocketLandingEnv(gym.Env):
         self.last_action = physical_action
         self.step_count += 1
 
-        terminated = bool(physics_info["terminated"])
-        truncated = self.step_count >= self.env_config.max_steps and not terminated
-        terminal_result = self._classify_terminal_state(physics_info["done_reason"], terminated, truncated)
+        physics_terminated = bool(physics_info["terminated"])
+        step_limit_reached = self.step_count >= self.env_config.max_steps and not physics_terminated
+        terminal_result = self._classify_terminal_state(
+            physics_info["done_reason"],
+            physics_terminated,
+            step_limit_reached,
+            physics_info,
+        )
+        terminated = terminal_result["terminated"]
+        truncated = terminal_result["truncated"]
         reward, reward_terms = self._compute_reward(clipped_action[0], terminal_result["done_reason"])
 
         self.last_info = {
@@ -198,6 +219,7 @@ class RocketLandingEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         physics_config = self.physics_engine.config
+        max_fuel_mass = max(self.physics_engine.max_fuel_mass, 1e-9)
         obs = np.array(
             [
                 self.state.x / physics_config.world_x_limit,
@@ -206,7 +228,9 @@ class RocketLandingEnv(gym.Env):
                 self.state.vy / self.env_config.max_speed,
                 self.state.theta / self.env_config.max_angle,
                 self.state.omega / self.env_config.max_angular_speed,
-                self.state.fuel,
+                self.state.fuel / max_fuel_mass,
+                1.0 if self.state.legs_deployed else 0.0,
+                self.state.stable_time / self.reward_config.required_stable_time,
             ],
             dtype=np.float32,
         )
@@ -225,6 +249,8 @@ class RocketLandingEnv(gym.Env):
                     self.state.theta,
                     self.state.omega,
                     self.state.fuel,
+                    1.0 if self.state.legs_deployed else 0.0,
+                    self.state.stable_time,
                 ],
                 dtype=np.float32,
             ),
@@ -281,16 +307,51 @@ class RocketLandingEnv(gym.Env):
             return self.reward_config.out_of_bounds_penalty
         if done_reason == "max_steps":
             return self.reward_config.max_steps_penalty
-        if done_reason in {"missed_pad", "hard_landing", "tip_over", "crash"}:
+        if done_reason in {"missed_pad", "hard_landing", "tip_over", "body_contact", "one_foot_contact", "crash"}:
             return self.reward_config.crash_penalty
         return 0.0
 
-    def _classify_terminal_state(self, physics_done_reason: str, terminated: bool, truncated: bool) -> dict[str, Any]:
+    def _classify_terminal_state(
+        self,
+        physics_done_reason: str,
+        terminated: bool,
+        truncated: bool,
+        physics_info: Mapping[str, Any],
+    ) -> dict[str, Any]:
         if truncated:
             return {
                 "done_reason": "max_steps",
                 "is_success": False,
                 "failure_flags": self._empty_failure_flags(),
+                "terminated": False,
+                "truncated": True,
+            }
+
+        contact = physics_info.get("contact", {})
+        if physics_done_reason == "leg_contact":
+            failure_flags = self._ground_contact_failure_flags(contact)
+            if any(failure_flags.values()):
+                return {
+                    "done_reason": self._primary_failure_reason(failure_flags),
+                    "is_success": False,
+                    "failure_flags": failure_flags,
+                    "terminated": True,
+                    "truncated": False,
+                }
+            if self.state.stable_time >= self.reward_config.required_stable_time:
+                return {
+                    "done_reason": "success",
+                    "is_success": True,
+                    "failure_flags": failure_flags,
+                    "terminated": True,
+                    "truncated": False,
+                }
+            return {
+                "done_reason": "leg_contact",
+                "is_success": False,
+                "failure_flags": failure_flags,
+                "terminated": False,
+                "truncated": False,
             }
 
         if not terminated:
@@ -298,6 +359,8 @@ class RocketLandingEnv(gym.Env):
                 "done_reason": "running",
                 "is_success": False,
                 "failure_flags": self._empty_failure_flags(),
+                "terminated": False,
+                "truncated": False,
             }
 
         if physics_done_reason == "out_of_bounds":
@@ -308,6 +371,8 @@ class RocketLandingEnv(gym.Env):
                     **self._empty_failure_flags(),
                     "out_of_bounds": True,
                 },
+                "terminated": True,
+                "truncated": False,
             }
 
         if physics_done_reason != "ground_contact":
@@ -315,39 +380,47 @@ class RocketLandingEnv(gym.Env):
                 "done_reason": physics_done_reason,
                 "is_success": False,
                 "failure_flags": self._empty_failure_flags(),
+                "terminated": True,
+                "truncated": False,
             }
 
-        failure_flags = self._ground_contact_failure_flags()
+        failure_flags = self._ground_contact_failure_flags(contact)
         is_success = not any(failure_flags.values())
         if is_success:
             return {
                 "done_reason": "success",
                 "is_success": True,
                 "failure_flags": failure_flags,
+                "terminated": True,
+                "truncated": False,
             }
 
         return {
             "done_reason": self._primary_failure_reason(failure_flags),
             "is_success": False,
             "failure_flags": failure_flags,
+            "terminated": True,
+            "truncated": False,
         }
 
-    def _ground_contact_failure_flags(self) -> dict[str, bool]:
+    def _ground_contact_failure_flags(self, contact: Mapping[str, Any]) -> dict[str, bool]:
         return {
             "missed_pad": abs(self.state.x - self.reward_config.pad_x) > self.reward_config.landing_tolerance,
             "hard_landing": (
-                abs(self.state.vx) > self.reward_config.max_touchdown_vx
-                or abs(self.state.vy) > self.reward_config.max_touchdown_vy
+                abs(contact.get("contact_vx", self.state.vx)) > self.reward_config.max_touchdown_vx
+                or abs(contact.get("contact_vy", self.state.vy)) > self.reward_config.max_touchdown_vy
             ),
             "tip_over": (
-                abs(self.state.theta) > self.reward_config.max_touchdown_angle
-                or abs(self.state.omega) > self.reward_config.max_touchdown_omega
+                abs(contact.get("contact_theta", self.state.theta)) > self.reward_config.max_touchdown_angle
+                or abs(contact.get("contact_omega", self.state.omega)) > self.reward_config.max_touchdown_omega
             ),
+            "body_contact": bool(contact.get("body_contact", False)),
+            "one_foot_contact": self._one_foot_contact(contact),
             "out_of_bounds": False,
         }
 
     def _primary_failure_reason(self, failure_flags: Mapping[str, bool]) -> str:
-        for reason in ("out_of_bounds", "missed_pad", "hard_landing", "tip_over"):
+        for reason in ("out_of_bounds", "body_contact", "missed_pad", "hard_landing", "tip_over", "one_foot_contact"):
             if failure_flags.get(reason, False):
                 return reason
         return "crash"
@@ -357,6 +430,8 @@ class RocketLandingEnv(gym.Env):
             "missed_pad": False,
             "hard_landing": False,
             "tip_over": False,
+            "body_contact": False,
+            "one_foot_contact": False,
             "out_of_bounds": False,
         }
 
@@ -372,3 +447,8 @@ class RocketLandingEnv(gym.Env):
             "terminal_reward": 0.0,
             "target_vy": 0.0,
         }
+
+    def _one_foot_contact(self, contact: Mapping[str, Any]) -> bool:
+        left = bool(contact.get("left_foot_contact", False))
+        right = bool(contact.get("right_foot_contact", False))
+        return left != right

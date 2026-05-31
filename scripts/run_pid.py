@@ -11,6 +11,7 @@ from falconlite.utils.logger import TelemetryLogger
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a PID FalconLite rollout.")
     parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--scenario", default=None, help="Initial-state scenario from configs/default.yaml.")
     parser.add_argument("--render", action="store_true", help="Render the rollout with Pygame.")
     parser.add_argument("--log", action="store_true", help="Write telemetry CSV for the rollout.")
     parser.add_argument("--log-dir", default=None, help="Telemetry output directory.")
@@ -23,7 +24,8 @@ def main() -> None:
     config = load_config()
     controller = PIDController(config)
     env = RocketLandingEnv(config=config, render_mode="human" if args.render else None)
-    _, last_info = env.reset()
+    reset_options = {"scenario": args.scenario} if args.scenario is not None else None
+    _, last_info = env.reset(options=reset_options)
     controller.reset()
     log_config = config.get("logging", {})
     logger = (
@@ -64,6 +66,7 @@ def main() -> None:
     state = last_info["state"]
     print("FalconLite Stage 6 PID rollout")
     print(f"project: {config['project']['name']}")
+    print(f"scenario: {args.scenario or 'default'}")
     print(f"steps: {executed_steps}")
     print(f"done_reason: {last_info['done_reason']}")
     print(f"is_success: {last_info['is_success']}")
@@ -71,7 +74,8 @@ def main() -> None:
     print(
         "final_state: "
         f"x={state.x:.3f}, y={state.y:.3f}, vx={state.vx:.3f}, vy={state.vy:.3f}, "
-        f"theta={state.theta:.3f}, omega={state.omega:.3f}, fuel={state.fuel:.3f}"
+        f"theta={state.theta:.3f}, omega={state.omega:.3f}, fuel={state.fuel:.3f}, "
+        f"legs_deployed={state.legs_deployed}, stable_time={state.stable_time:.3f}"
     )
     if logger is not None:
         print(f"telemetry: {logger.path}")

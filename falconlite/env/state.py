@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RocketState:
-    """Minimal 2D rocket state used by the simulator."""
+    """2D rocket state.
+
+    Fuel is stored as remaining propellant mass in kilograms.
+    """
 
     x: float
     y: float
@@ -14,6 +17,8 @@ class RocketState:
     theta: float
     omega: float
     fuel: float
+    legs_deployed: bool = False
+    stable_time: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -25,3 +30,4 @@ class RocketAction:
 
     thrust: float
     gimbal_angle: float
+    leg_deploy: bool = False

@@ -29,6 +29,8 @@ def test_run_episode_returns_result_for_random_controller() -> None:
         "missed_pad",
         "hard_landing",
         "tip_over",
+        "body_contact",
+        "one_foot_contact",
         "out_of_bounds",
         "max_steps",
     }
@@ -45,6 +47,26 @@ def test_run_episode_pid_can_succeed() -> None:
             controller_name="pid",
             episode_id=1,
             seed=0,
+        )
+    finally:
+        env.close()
+
+    assert result.is_success
+    assert result.done_reason == "success"
+
+
+def test_run_episode_accepts_diagonal_scenario() -> None:
+    config = load_config()
+    env = RocketLandingEnv(config=config)
+
+    try:
+        result = run_episode(
+            env=env,
+            controller=PIDController(config),
+            controller_name="pid",
+            episode_id=1,
+            seed=0,
+            scenario="terminal_diagonal",
         )
     finally:
         env.close()

@@ -5,6 +5,11 @@ import numpy as np
 from falconlite.env import RocketLandingEnv
 
 
+def leg_contact_cm_y(env: RocketLandingEnv) -> float:
+    left_foot, right_foot = env.physics_engine.config.geometry.foot_positions_body(deployed=True)
+    return -min(left_foot[1], right_foot[1])
+
+
 def test_reset_returns_observation_and_info() -> None:
     env = RocketLandingEnv()
 
@@ -14,7 +19,21 @@ def test_reset_returns_observation_and_info() -> None:
         assert obs.shape == env.observation_space.shape
         assert env.observation_space.contains(obs)
         assert info["done_reason"] == "reset"
-        assert info["state"].y == 100.0
+        assert info["state"].y == 250.0
+    finally:
+        env.close()
+
+
+def test_reset_accepts_named_initial_state_scenario() -> None:
+    env = RocketLandingEnv()
+
+    try:
+        obs, info = env.reset(options={"scenario": "terminal_diagonal"})
+
+        assert env.observation_space.contains(obs)
+        assert info["state"].x == -100.0
+        assert info["state"].vx == 12.0
+        assert info["state"].vy == -30.0
     finally:
         env.close()
 
@@ -44,11 +63,12 @@ def test_step_clips_actions_to_action_space() -> None:
 
     try:
         env.reset(seed=123)
-        _, _, _, _, info = env.step(np.array([10.0, -10.0], dtype=np.float32))
+        _, _, _, _, info = env.step(np.array([10.0, -10.0, 10.0], dtype=np.float32))
 
-        np.testing.assert_allclose(info["normalized_action"], np.array([1.0, -1.0], dtype=np.float32))
+        np.testing.assert_allclose(info["normalized_action"], np.array([1.0, -1.0, 1.0], dtype=np.float32))
         assert info["clamped_action"].thrust == env.physics_engine.config.max_thrust
         assert info["clamped_action"].gimbal_angle == -env.physics_engine.config.max_gimbal_angle
+        assert info["actual_action"].leg_deploy
     finally:
         env.close()
 
@@ -90,7 +110,7 @@ def test_max_steps_sets_truncated() -> None:
 
     try:
         env.reset(seed=123)
-        _, _, terminated, truncated, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        _, _, terminated, truncated, info = env.step(np.array([0.0, 0.0, 0.0], dtype=np.float32))
 
         assert not terminated
         assert truncated
@@ -111,7 +131,7 @@ def test_render_mode_none_is_noop() -> None:
         env.close()
 
 
-def test_ground_contact_success_is_classified() -> None:
+def test_deployed_leg_contact_success_requires_stability_window() -> None:
     env = RocketLandingEnv()
 
     try:
@@ -119,16 +139,24 @@ def test_ground_contact_success_is_classified() -> None:
             options={
                 "initial_state": {
                     "x": 0.0,
-                    "y": 0.01,
+                    "y": leg_contact_cm_y(env) + 0.01,
                     "vx": 0.0,
-                    "vy": -1.0,
+                    "vy": -0.1,
                     "theta": 0.0,
                     "omega": 0.0,
-                    "fuel": 1.0,
+                    "fuel": 10_000.0,
+                    "legs_deployed": True,
                 }
             }
         )
-        _, reward, terminated, truncated, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        reward = 0.0
+        terminated = False
+        truncated = False
+        info = {}
+        for _ in range(int(env.reward_config.required_stable_time / env.physics_engine.config.dt) + 2):
+            _, reward, terminated, truncated, info = env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
+            if terminated or truncated:
+                break
 
         assert terminated
         assert not truncated
@@ -136,6 +164,7 @@ def test_ground_contact_success_is_classified() -> None:
         assert info["is_success"]
         assert info["done_reason"] == "success"
         assert not any(info["failure_flags"].values())
+        assert info["state"].stable_time >= env.reward_config.required_stable_time
         assert info["reward_terms"]["terminal_reward"] == env.reward_config.success_bonus
     finally:
         env.close()
@@ -149,16 +178,17 @@ def test_ground_contact_hard_landing_is_classified() -> None:
             options={
                 "initial_state": {
                     "x": 0.0,
-                    "y": 0.01,
+                    "y": leg_contact_cm_y(env) + 0.01,
                     "vx": 0.0,
                     "vy": -10.0,
                     "theta": 0.0,
                     "omega": 0.0,
-                    "fuel": 1.0,
+                    "fuel": 10_000.0,
+                    "legs_deployed": True,
                 }
             }
         )
-        _, reward, terminated, _, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        _, reward, terminated, _, info = env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
 
         assert terminated
         assert reward < 0
@@ -176,17 +206,18 @@ def test_ground_contact_missed_pad_has_priority() -> None:
         env.reset(
             options={
                 "initial_state": {
-                    "x": 20.0,
-                    "y": 0.01,
+                    "x": 40.0,
+                    "y": leg_contact_cm_y(env) + 0.01,
                     "vx": 0.0,
                     "vy": -1.0,
                     "theta": 0.0,
                     "omega": 0.0,
-                    "fuel": 1.0,
+                    "fuel": 10_000.0,
+                    "legs_deployed": True,
                 }
             }
         )
-        _, _, terminated, _, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        _, _, terminated, _, info = env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
 
         assert terminated
         assert not info["is_success"]
@@ -204,16 +235,17 @@ def test_ground_contact_tip_over_is_classified() -> None:
             options={
                 "initial_state": {
                     "x": 0.0,
-                    "y": 0.01,
+                    "y": leg_contact_cm_y(env) + 0.01,
                     "vx": 0.0,
                     "vy": -1.0,
                     "theta": 0.5,
                     "omega": 0.0,
-                    "fuel": 1.0,
+                    "fuel": 10_000.0,
+                    "legs_deployed": True,
                 }
             }
         )
-        _, _, terminated, _, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        _, _, terminated, _, info = env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
 
         assert terminated
         assert not info["is_success"]
@@ -230,7 +262,7 @@ def test_out_of_bounds_has_terminal_penalty() -> None:
         env.reset(
             options={
                 "initial_state": {
-                    "x": 101.0,
+                    "x": 251.0,
                     "y": 100.0,
                     "vx": 0.0,
                     "vy": 0.0,
@@ -240,7 +272,7 @@ def test_out_of_bounds_has_terminal_penalty() -> None:
                 }
             }
         )
-        _, reward, terminated, _, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+        _, reward, terminated, _, info = env.step(np.array([0.0, 0.0, 0.0], dtype=np.float32))
 
         assert terminated
         assert reward < 0

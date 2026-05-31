@@ -1,50 +1,85 @@
 # TODO lists
 
-## Stage: Falcon-9 booster geometry (in progress)
+## Completed foundation
 
-Scope: 2D side-view geometry + meter-scale renderer. Physics, contact, and reward stay
-on CM-based behavior in this pass. Modeled after a returning Falcon 9 first stage on
-its landing burn (dry ~25.6 t, wet ~35.6 t, 1× Merlin throttled to 40–100% of ~845 kN).
-Side projection shows ONE pair of legs and ONE pair of grid fins (the cross-pattern
-front/back pair overlaps in 2D).
+- [x] Meter-scale Falcon-9-style booster geometry
+  - `RocketGeometry` with body, nozzle, grid fins, side-view landing legs, foot points
+  - World transforms for named geometry points
+- [x] Fuel represented as propellant mass in kilograms
+- [x] Geometry-based renderer
+  - Meter-scale body, legs, grid fins, gimballed flame, lowered landing pad visual
+- [x] Geometry-based ground contact
+  - Body contact, one-foot contact, two-foot support, contact velocity diagnostics
+- [x] Landing leg deploy state/action
+  - Gym action is `[thrust, gimbal, leg_deploy]`
+  - Success requires both feet supported for `required_stable_time`
+- [x] Orientation-aware aerodynamic drag
+  - Upright rocket uses axial projected area
+  - Sideways rocket uses much larger side projected area
+  - Free-fall script can compare drag vs `--vacuum`
+- [x] Terminal approach scenarios
+  - `terminal_vertical`
+  - `terminal_diagonal`
 
-- [x] `RocketGeometry` dataclass (`falconlite/env/geometry.py`)
-  - `height_m`, `width_m`, `engine_offset_m`, `nozzle_radius_m`
-  - `leg_length_m`, `leg_span_m`, `leg_stow_angle_rad`, `leg_deploy_angle_rad`
-  - `grid_fin_offset_m`, `grid_fin_chord_m`, `grid_fin_span_m`
-  - helpers: `nozzle_position_body`, `grid_fin_positions_body`, `foot_positions_body`
-- [x] Wire geometry into `PhysicsConfig` (rename `engine_lever_arm` → `engine_offset_m`)
-- [x] Update `configs/default.yaml` to F9-booster scale + add `physics.geometry` block
-- [x] Update `tests/test_physics.py` to F9 scale
-- [ ] Render rocket in meters with TVC + grid fins
-  - Drop `rocket_width_px` / `rocket_height_px` from `RendererConfig` and config
-  - Tapered body, nose cone, 2 legs, 2 grid fins, gimballed flame
-  - Update `tests/test_renderer.py`
-- [ ] Run `poetry run pytest` and confirm green
-- [ ] Spot-check rendering: `poetry run python scripts/run_freefall.py --render`
+## Make terminal landing meaningfully harder
 
-## Next stage: contact, legs, drag
+Priority order: raise difficulty with physics/evaluation changes before adding advanced controllers.
 
-- [ ] Compute contact points (leg tips when deployed; engine bell otherwise)
-- [ ] Compute force application point (engine offset already known; consider grid fin
-      hinge points for aero forces)
-- [ ] Replace ground-contact rule (`y <= 0` on CM) with geometry-based check on the
-      lowest contact point in world frame
-- [ ] Landing-leg deploy action / state (binary deploy switch + transition timer)
-- [ ] Atmospheric drag
-  - Body drag: `0.5 * rho * v^2 * Cd * frontal_area`
-  - Grid fin lift/drag with deflection (the actual attitude-control authority)
-  - Simple exponential `rho(altitude)` model
-- [ ] Reward / termination updates for the new contact and drag model
+- [ ] Randomized terminal scenario generator
+  - Sample `x`, `y`, `vx`, `vy`, `theta`, `omega`, and fuel from configured ranges
+  - Add `scripts/evaluate.py --scenario randomized_terminal`
+  - Report seed and sampled initial state in telemetry
+  - Target: PID should no longer score near 100% over broad random cases
 
-## Follow-ups deferred from this pass
+- [ ] Stricter landing criteria
+  - Reduce `landing_tolerance` from the current broad pad-scale value to a tighter target
+  - Tighten `max_touchdown_vx`, `max_touchdown_vy`, `max_touchdown_angle`, and `max_touchdown_omega`
+  - Add separate thresholds for "safe landing" vs "survived but rough landing"
 
-- [ ] Re-tune PID gains for F9 scale (current gains were sized for the 1 kg / 20 N toy)
-- [ ] Re-tune reward weights (touchdown thresholds, descent rate gain, fuel weight) so
-      `evaluate.py` gives meaningful PID baseline numbers at the new scale
-- [ ] Decide on RCS (cold-gas attitude thrusters) — current plan: TVC + grid fins only
+- [ ] Realistic leg contact dynamics
+  - Replace "supported feet zero velocity" with spring-damper normal forces
+  - Add foot friction and sliding
+  - Allow one foot to touch first and create torque
+  - Preserve post-touchdown rocking instead of snapping to stable contact
+  - Success should require stable attitude and low motion after touchdown
 
-## Future: 2.5D extension
+- [ ] Throttle realism
+  - Add minimum throttle for the active landing engine
+  - Optionally add a simple on/off landing burn mode
+  - Make hover impossible when thrust-to-weight exceeds 1 at minimum throttle
+  - This should make timing matter more than the current smooth hover-like PID descent
 
-- [ ] Add depth-axis legs/fins (the front/back pair currently folded into the side pair)
-- [ ] Per-engine modeling if multi-engine landing burns are simulated
+- [ ] Finite fuel stress cases
+  - Add scenarios with `fuel` ranges such as 6,000-10,000 kg
+  - Track fuel-out failure distinctly
+  - Evaluate fuel margin at touchdown, not only success/failure
+
+- [ ] Wind and gust disturbances
+  - Use existing `wind_x_mps` / `wind_y_mps` for steady wind cases
+  - Add simple gust profiles over time
+  - Add robustness evaluation columns for wind and gust intensity
+
+- [ ] Sensor noise and state-estimation stress
+  - Feed controllers noisy observations while physics keeps true state
+  - Log both true and observed state
+  - Keep noise optional so deterministic debugging remains possible
+
+- [ ] Distributed aerodynamic forces
+  - Split body into 5-9 sample nodes
+  - Compute node velocity from `v_cm + omega x r`
+  - Sum node drag forces and `r x F` torque
+  - Add grid-fin lift/drag as separate force nodes later
+
+- [ ] Terminal guidance metrics
+  - Add desired glide-slope / divert corridor diagnostics
+  - Track crossrange error, lateral braking distance, and touchdown ellipse
+  - Make README compare vertical vs diagonal vs randomized terminal results
+
+## Later realism, not needed yet
+
+- [ ] Engine response delay and throttle slew rate
+- [ ] Gimbal actuator rate limit / delay
+- [ ] Variable mass, center of mass, and inertia during fuel burn
+- [ ] Cold-gas/RCS attitude thrusters for high-altitude flip maneuver
+- [ ] Entry burn and grid-fin aerodynamic guidance phase
+- [ ] 2.5D extension with lateral `z`, yaw, roll, and four-leg contact geometry

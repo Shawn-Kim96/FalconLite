@@ -69,6 +69,34 @@ class RocketGeometry:
         """Engine nozzle exit plane in the body frame."""
         return (0.0, -self.engine_offset_m)
 
+    def nose_position_body(self) -> tuple[float, float]:
+        """Nose tip in the body frame."""
+        return (0.0, self.height_m - self.engine_offset_m)
+
+    def body_bottom_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Left and right body bottom corners in the body frame."""
+        radius = self.width_m / 2
+        return ((-radius, -self.engine_offset_m), (radius, -self.engine_offset_m))
+
+    def body_top_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Left and right body shoulder corners below the nose."""
+        radius = self.width_m / 2
+        nose_y = self.height_m - self.engine_offset_m
+        shoulder_y = nose_y - min(3.0, self.height_m * 0.08)
+        return ((-radius, shoulder_y), (radius, shoulder_y))
+
+    def body_outline_body(self) -> tuple[tuple[float, float], ...]:
+        """Simple tapered booster body outline in body-frame coordinates."""
+        left_bottom, right_bottom = self.body_bottom_positions_body()
+        left_top, right_top = self.body_top_positions_body()
+        return (left_bottom, right_bottom, right_top, self.nose_position_body(), left_top)
+
+    def leg_hinge_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Hinge points of the two side-view landing legs in the body frame."""
+        body_radius = self.width_m / 2
+        hinge_y = -self.engine_offset_m + 0.5 * self.leg_length_m
+        return ((-body_radius, hinge_y), (body_radius, hinge_y))
+
     def grid_fin_positions_body(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Hinge points of the left and right grid fins in the body frame."""
         x_offset = self.width_m / 2
@@ -92,3 +120,53 @@ class RocketGeometry:
         foot_x = body_radius
         foot_y = hinge_y - self.leg_length_m
         return ((-foot_x, foot_y), (foot_x, foot_y))
+
+    def body_to_world(
+        self,
+        point: tuple[float, float],
+        *,
+        x: float,
+        y: float,
+        theta: float,
+    ) -> tuple[float, float]:
+        """Transform a body-frame point into world coordinates."""
+        point_x, point_y = point
+        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta)
+        return (
+            x + point_x * cos_theta + point_y * sin_theta,
+            y - point_x * sin_theta + point_y * cos_theta,
+        )
+
+    def points_world(
+        self,
+        *,
+        x: float,
+        y: float,
+        theta: float,
+        legs_deployed: bool,
+    ) -> dict[str, tuple[float, float]]:
+        """Return named geometry points in world coordinates."""
+        left_foot, right_foot = self.foot_positions_body(legs_deployed)
+        left_hinge, right_hinge = self.leg_hinge_positions_body()
+        left_bottom, right_bottom = self.body_bottom_positions_body()
+        left_top, right_top = self.body_top_positions_body()
+        left_fin, right_fin = self.grid_fin_positions_body()
+        body_points = {
+            "nose": self.nose_position_body(),
+            "nozzle": self.nozzle_position_body(),
+            "left_body_bottom": left_bottom,
+            "right_body_bottom": right_bottom,
+            "left_body_top": left_top,
+            "right_body_top": right_top,
+            "left_leg_hinge": left_hinge,
+            "right_leg_hinge": right_hinge,
+            "left_foot": left_foot,
+            "right_foot": right_foot,
+            "left_grid_fin": left_fin,
+            "right_grid_fin": right_fin,
+        }
+        return {
+            name: self.body_to_world(point, x=x, y=y, theta=theta)
+            for name, point in body_points.items()
+        }

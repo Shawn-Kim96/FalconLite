@@ -37,6 +37,7 @@ class PIDControllerConfig:
     theta: PIDGains
     descent: PIDGains
     max_target_angle: float = 0.35
+    leg_deploy_altitude_m: float = 120.0
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any] | None) -> "PIDControllerConfig":
@@ -46,6 +47,7 @@ class PIDControllerConfig:
             theta=PIDGains.from_mapping(values.get("theta")),
             descent=PIDGains.from_mapping(values.get("descent")),
             max_target_angle=float(values.get("max_target_angle", 0.35)),
+            leg_deploy_altitude_m=float(values.get("leg_deploy_altitude_m", 120.0)),
         )
 
 
@@ -55,6 +57,7 @@ class PIDController:
     The controller returns normalized Gym actions:
     - thrust command in [0, 1]
     - gimbal command in [-1, 1]
+    - leg deploy command in {0, 1}
     """
 
     def __init__(self, config: Mapping[str, Any]) -> None:
@@ -76,7 +79,7 @@ class PIDController:
         self.last_debug = {}
 
     def select_action(self, state: RocketState, info: Mapping[str, Any] | None = None) -> np.ndarray:
-        """Compute a normalized thrust/gimbal command from the current state."""
+        """Compute a normalized thrust/gimbal/leg command from the current state."""
 
         dt = self._dt_from_info(info)
         pad_error = self.reward_config.pad_x - state.x
@@ -110,6 +113,7 @@ class PIDController:
             + self.pid_config.descent.kp * descent_error
             + self.pid_config.descent.ki * self.descent_integral
         )
+        leg_deploy_command = 1.0 if state.legs_deployed or state.y <= self.pid_config.leg_deploy_altitude_m else 0.0
 
         self.last_debug = {
             "pad_error": pad_error,
@@ -120,11 +124,13 @@ class PIDController:
             "hover_command": hover_command,
             "raw_thrust_command": thrust_command,
             "raw_gimbal_command": gimbal_command,
+            "leg_deploy_command": leg_deploy_command,
         }
         return np.array(
             [
                 self._clip(thrust_command, 0.0, 1.0),
                 self._clip(gimbal_command, -1.0, 1.0),
+                leg_deploy_command,
             ],
             dtype=np.float32,
         )
@@ -138,8 +144,8 @@ class PIDController:
         return -descent_rate
 
     def _hover_thrust_command(self, state: RocketState) -> float:
-        fuel_fraction = self._clip(state.fuel, 0.0, 1.0)
-        fuel_mass = (self.physics_config.mass - self.physics_config.dry_mass) * fuel_fraction
+        max_fuel_mass = self.physics_config.mass - self.physics_config.dry_mass
+        fuel_mass = self._clip(state.fuel, 0.0, max_fuel_mass)
         mass = self.physics_config.dry_mass + fuel_mass
         hover_thrust = mass * self.physics_config.gravity
         return hover_thrust / self.physics_config.max_thrust

@@ -11,7 +11,7 @@ import pandas as pd
 from falconlite.eval.rollout import EpisodeResult
 
 
-CRASH_REASONS = {"missed_pad", "hard_landing", "tip_over", "crash"}
+CRASH_REASONS = {"missed_pad", "hard_landing", "tip_over", "body_contact", "one_foot_contact", "crash"}
 
 
 def summarize_episode_results(results: list[EpisodeResult]) -> dict[str, float]:
@@ -32,6 +32,8 @@ def summarize_episode_results(results: list[EpisodeResult]) -> dict[str, float]:
         "hard_landing_rate": done_counts["hard_landing"] / count,
         "missed_pad_rate": done_counts["missed_pad"] / count,
         "tip_over_rate": done_counts["tip_over"] / count,
+        "body_contact_rate": done_counts["body_contact"] / count,
+        "one_foot_contact_rate": done_counts["one_foot_contact"] / count,
         "out_of_bounds_rate": done_counts["out_of_bounds"] / count,
         "max_steps_rate": done_counts["max_steps"] / count,
         "average_total_reward": _mean(result.total_reward for result in results),

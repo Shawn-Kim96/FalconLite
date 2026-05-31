@@ -11,15 +11,21 @@ physics:
   max_thrust: 845000.0
   max_gimbal_angle: 0.087
   fuel_burn_rate: 280.0
-  world_x_limit: 1000.0
-  world_y_limit: 2500.0
+  ground_contact_tolerance_m: 0.25
+  air_density_kg_m3: 1.225
+  drag_cd_axial: 0.65
+  drag_cd_side: 1.05
+  wind_x_mps: 0.0
+  wind_y_mps: 0.0
+  world_x_limit: 250.0
+  world_y_limit: 350.0
   geometry:
     height_m: 41.0
     width_m: 3.7
     engine_offset_m: 18.0
     nozzle_radius_m: 0.9
     leg_length_m: 9.0
-    leg_span_m: 12.0
+    leg_span_m: 18.3
     leg_stow_angle_rad: 0.0
     leg_deploy_angle_rad: 0.6108
     grid_fin_offset_m: 18.0
@@ -27,18 +33,42 @@ physics:
     grid_fin_span_m: 1.5
 
 environment:
-  max_steps: 4000
-  max_speed: 300.0
+  max_steps: 3000
+  max_speed: 120.0
   max_angular_speed: 1.0
   max_angle: 3.141592653589793
   initial_state:
     x: 0.0
-    y: 2000.0
+    y: 250.0
     vx: 0.0
-    vy: -100.0
+    vy: -30.0
     theta: 0.0
     omega: 0.0
-    fuel: 1.0
+    fuel: 10000.0
+    legs_deployed: false
+    stable_time: 0.0
+
+scenarios:
+  terminal_vertical:
+    x: 0.0
+    y: 250.0
+    vx: 0.0
+    vy: -30.0
+    theta: 0.0
+    omega: 0.0
+    fuel: 10000.0
+    legs_deployed: false
+    stable_time: 0.0
+  terminal_diagonal:
+    x: -100.0
+    y: 250.0
+    vx: 12.0
+    vy: -30.0
+    theta: 0.0
+    omega: 0.0
+    fuel: 10000.0
+    legs_deployed: false
+    stable_time: 0.0
 
 render:
   width: 900
@@ -55,6 +85,7 @@ reward:
   max_touchdown_vy: 6.0
   max_touchdown_angle: 0.1
   max_touchdown_omega: 0.1
+  required_stable_time: 3.0
   target_descent_rate_gain: 0.05
   min_target_descent_rate: 2.0
   max_target_descent_rate: 80.0
@@ -71,11 +102,12 @@ reward:
   max_steps_penalty: -20.0
 
 pid:
-  max_target_angle: 0.35
+  max_target_angle: 0.18
+  leg_deploy_altitude_m: 120.0
   x:
     kp: 0.02
     ki: 0.0
-    kd: 0.01
+    kd: 0.08
   theta:
     kp: 2.0
     ki: 0.0
