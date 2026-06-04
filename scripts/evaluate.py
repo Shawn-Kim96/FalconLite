@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from falconlite.controllers import PIDController, RandomController
+from falconlite.controllers import MPCController, PIDController, RandomController
 from falconlite.env import RocketLandingEnv
 from falconlite.eval.metrics import episode_results_to_frame, metrics_to_frame, summarize_episode_results
 from falconlite.eval.rollout import run_episode
@@ -12,7 +12,7 @@ from falconlite.utils.config import load_config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate FalconLite controllers.")
-    parser.add_argument("--controller", default="random", choices=["random", "pid"])
+    parser.add_argument("--controller", default="random", choices=["random", "pid", "mpc"])
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--scenario", default=None, help="Initial-state scenario from configs/default.yaml.")
@@ -28,6 +28,8 @@ def make_controller(name: str, config: dict, seed: int):
         return RandomController(seed=seed)
     if name == "pid":
         return PIDController(config)
+    if name == "mpc":
+        return MPCController(config)
     raise ValueError(f"Unsupported controller: {name}")
 
 
