@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(poetry run *)",
+      "Bash(poetry run python -c ' *)",
+      "Bash(poetry --version)",
+      "mcp__plugin_oh-my-claudecode_t__project_memory_read",
+      "mcp__plugin_oh-my-claudecode_t__project_memory_write",
+      "WebFetch(*)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:www.larsblackmore.com)",
+      "Bash(grep -rn -E \"y.{1,5}\\(250|150|200|100|350\\)|mass.*35600|y_limit\" tests/)",
+      "Read(//tmp/**)",
+      "Bash(mkdir -p /tmp/falcon_save)",
+      "Bash(cp falconlite/env/physics.py falconlite/env/geometry.py configs/default.yaml tests/test_evaluation.py tests/test_rocket_env.py tests/test_pid_controller.py tests/test_renderer.py tests/test_physics.py /tmp/falcon_save/)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(sed -n '2,6p' /tmp/mpc_log/episode_000001.csv)",
+      "Bash(sed -n '101,105p' /tmp/mpc_log/episode_000001.csv)",
+      "Bash(sed -n '501,505p' /tmp/mpc_log/episode_000001.csv)",
+      "Bash(sed -n '1001,1005p' /tmp/mpc_log/episode_000001.csv)"
+    ]
+  }
+}
